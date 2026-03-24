@@ -20,6 +20,8 @@ Usage:
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates 
+import subprocess
+import datetime
 import pymsis 
 import sys
 
@@ -150,8 +152,8 @@ def get_version(str):
     :param str: NRLMSIS Model String
     """
     versions = {
-        "MSIS00": 0,
-        "MSIS20": 2.0,
+        "MSISE90": 90,
+        "MSISE00": 0,
         "MSIS21": 2.1
     }
     return versions.get(str, None)
@@ -168,6 +170,7 @@ def run_msis(weather_file, swarm_data, version_str, start_date, end_date):
     :param start_date: start date of storm period
     :param end_date: end date of storm period
     """
+
     weather_data = read_weather(weather_file)
     dates = np.arange(start_date, end_date, np.timedelta64(30, "s"))
     densities = np.full(len(dates), np.nan)
@@ -177,27 +180,55 @@ def run_msis(weather_file, swarm_data, version_str, start_date, end_date):
 
         if day not in weather_data or time not in swarm_data:
             continue
+        
+        if get_version(version_str) != 90:
+            try: 
+                f107 = weather_data[day]["f107"]
+                f107a = weather_data[day]["f107a"]
+                aps = convert_ap(time, weather_data)
 
-        try: 
+                out = pymsis.calculate(
+                    time,
+                    swarm_data[time]["long"],
+                    swarm_data[time]["lat"],
+                    swarm_data[time]["alt"] / 1000,
+                    f107,
+                    f107a,
+                    aps,
+                    version=get_version(version_str),
+                    geomagnetic_activity=-1,
+                )
+                out = np.squeeze(out)
+                densities[i] = out[pymsis.Variable.MASS_DENSITY] * 1e9
+            except KeyError:
+                continue
+        else:
+
             f107 = weather_data[day]["f107"]
             f107a = weather_data[day]["f107a"]
-            aps = convert_ap(time, weather_data)
+            ap0, ap1, ap2, ap3, ap4, ap5, ap6, aps = convert_ap(time, weather_data)
 
-            out = pymsis.calculate(
-                time,
-                swarm_data[time]["long"],
-                swarm_data[time]["lat"],
-                swarm_data[time]["alt"] / 1000,
-                f107,
-                f107a,
-                aps,
-                version=get_version(version_str),
-                geomagnetic_activity=-1,
-            )
-            out = np.squeeze(out)
-            densities[i] = out[pymsis.Variable.MASS_DENSITY] * 1e9
-        except KeyError:
-            continue
+            with open("msis_drives.txt", "w") as f:
+                dtime = time.astype(datetime.datetime)
+                year = dtime.strftime("%y")
+                day = dtime.strftime("%j")
+                hour = dtime.strftime("%H")
+                minute = dtime.strftime("%M")
+                sec = dtime.strftime("%S")
+                f.write(
+                    f"{year},{day},{hour},{minute},{sec},"
+                    f"{swarm[time]['long']},{swarm[time]['lat']},{swarm[time]['alt']/1000},"
+                    f"{f107},{f107a},"
+                    f"{int(ap0)},{int(ap1)},{int(ap2)},{int(ap3)},{int(ap4)},{int(ap5)},{int(ap6)}"
+                )
+
+            subprocess.run(["./msise90.exe"], check=True)
+
+            with open("msis_out.txt", "r") as f:
+                line = f.readline().strip()
+            
+            parts = line.split()
+            densities[i] = float(parts[5]) * 1e12
 
     return densities
 
@@ -295,7 +326,7 @@ def plot_and_save(storm_str, swarm_str, version, avg_times, moa_avg, msis_avg, s
     fig.text(x_center, 0.98, f"{storm_fig_str} SWARM-{swarm_str}: Orbit-averaged Densities",
         ha='center', va='top', fontsize=size, fontweight='bold')
     
-    versions = {0: "NRLMSIS-00", 2.0: "NRLMSIS 2.0", 2.1: "NRLMSIS 2.1"}
+    versions = {90: "MSISE-90", 0: "NRLMSIS-00", 2.0: "NRLMSIS 2.0", 2.1: "NRLMSIS 2.1"}
     ax_ap.plot(avg_times, msis_avg * (10**5) , linewidth=3, color='blue', label=versions.get(version, None))
     ax_ap.plot(avg_times, moa_avg * (10**5) , color='red', linewidth=3, label='MOA-2')
     ax_ap.plot(avg_times, swarm_avg * (10**5) , color='black', linewidth=3, label=f'Swarm {swarm_str}')
@@ -349,8 +380,8 @@ if __name__ == "__main__":
         print("Usage: python msis.py <Storm> <Swarm> <NRLMSIS Model>")
         sys.exit(1)
     
-    if model not in ("MSIS00", "MSIS20", "MSIS21"):
-        print("<NRLMSIS Model> must be MSIS00, MSIS20, MSIS21")
+    if model not in ("MSISE90", "MSISE00", "MSIS21"):
+        print("<NRLMSIS Model> must be MSISE90, MSISE00, MSIS21")
         print("Usage: python msis.py <Storm> <Swarm> <NRLMSIS Model>")
         sys.exit(1)
 
