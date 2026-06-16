@@ -145,7 +145,21 @@ def convert_ap(time, ap_data):
 
     return [[ap0, ap1, ap2, ap3, ap4, ap5, ap6]], ap0, ap1, ap2, ap3, ap4, ap5, ap6
 
-def run_msis(weather_file, swarm_data, model, start_date, end_date):
+def get_version(str):
+    """
+    Docstring for get_version: returns integer version 
+    for pymsis given desired msis model
+    
+    :param str: NRLMSIS Model String
+    """
+    versions = {
+        "MSISE90": 90,
+        "NRLMSISE00": 0,
+        "MSIS21": 2.1
+    }
+    return versions.get(str, None)
+
+def run_msis(weather_file, swarm_data, version_str, start_date, end_date):
     """
     Docstring for run_msis: runs the NRLMSIS model along
     swarm for the given time period. Outputs the densities
@@ -161,7 +175,6 @@ def run_msis(weather_file, swarm_data, model, start_date, end_date):
     weather_data = read_weather(weather_file)
     dates = np.arange(start_date, end_date, np.timedelta64(30, "s"))
     densities = np.full(len(dates), np.nan)
-    densities_21 = np.full(len(dates), np.nan)
 
     for i, time in enumerate(tqdm(dates)):
         day = time.astype("datetime64[D]")
@@ -169,7 +182,7 @@ def run_msis(weather_file, swarm_data, model, start_date, end_date):
         if day not in weather_data or time not in swarm_data:
             continue
         
-        if model["version"] != 90:
+        if get_version(version_str) != 90:
             try: 
                 f107 = weather_data[day]["f107"]
                 f107a = weather_data[day]["f107a"]
@@ -183,45 +196,18 @@ def run_msis(weather_file, swarm_data, model, start_date, end_date):
                     f107,
                     f107a,
                     aps,
-                    version=model["version"],
-                    geomagnetic_activity=-1,
-                )
-                out21 = pymsis.calculate(
-                    time,
-                    swarm_data[time]["long"],
-                    swarm_data[time]["lat"],
-                    swarm_data[time]["alt"] / 1000,
-                    f107,
-                    f107a,
-                    aps,
-                    version=2.1,
+                    version=get_version(version_str),
                     geomagnetic_activity=-1,
                 )
                 out = np.squeeze(out)
-                out21 = np.squeeze(out21)
                 densities[i] = out[pymsis.Variable.MASS_DENSITY] # kg/m^3
-                densities_21[i] = out21[pymsis.Variable.MASS_DENSITY] # kg/m^3
             except KeyError:
                 continue
         else:
 
             f107 = weather_data[day]["f107"]
             f107a = weather_data[day]["f107a"]
-            aps, ap0, ap1, ap2, ap3, ap4, ap5, ap6 = convert_ap(time, weather_data)
-
-            out21 = pymsis.calculate(
-                time,
-                swarm_data[time]["long"],
-                swarm_data[time]["lat"],
-                swarm_data[time]["alt"] / 1000,
-                f107,
-                f107a,
-                aps,
-                version=2.1,
-                geomagnetic_activity=-1,
-            )
-            out21 = np.squeeze(out21)
-            densities_21[i] = out21[pymsis.Variable.MASS_DENSITY] # kg/m^3
+            _, ap0, ap1, ap2, ap3, ap4, ap5, ap6 = convert_ap(time, weather_data)
 
             dtime = time.astype(datetime.datetime)
             yr = dtime.strftime("%y")
@@ -253,7 +239,7 @@ def run_msis(weather_file, swarm_data, model, start_date, end_date):
             parts = line.split()
             densities[i] = float(parts[5]) # kg/m^3
 
-    return densities, densities_21
+    return densities
 
 def compute_orbit_averages(arg_lat, densities, times, wrap_threshold=-300):
     """
@@ -308,34 +294,20 @@ def delta_p(avg, swarm_avg):
     dp = abs(np.max(avg) - np.max(swarm_avg))/(np.max(avg) + np.max(swarm_avg)/2) * 100
     return dp
 
+
 def rho_t(avg, avg_times):
     """
-    Calculates the time-integrated density.
-
-    Parameters:
-        avg (array-like): density values
-        avg_times (array-like): datetime64 array
-
-    Returns:
-        float: integral of density over time
+    Docstring for rho_t: calculates the rho-t of MOA-2
+    and MSIS compared to Swarm.
+    
+    :param avg: average density array of MOA-2 or MSIS
+    :param avg_times: average time array (x-axis for density array)
     """
-    avg = np.asarray(avg)
-    avg_times = np.asarray(avg_times)
-    times_sec = (avg_times - avg_times[0]) / np.timedelta64(1, 's')
-    return np.trapezoid(avg, x=times_sec)
+    times_sec = (avg_times - avg_times[0]).astype('timedelta64[s]').astype(float)
+    rho_t = np.trapezoid(avg, x=times_sec)
+    return rho_t
 
-def calc_mape(true, est):
-    return np.mean(np.abs((true - est) / true)) * 100
-
-def calc_oc(obs, model):
-    r = np.log(obs / model)
-    mean_oc = np.exp(np.mean(r))
-    precision = np.exp(np.std(r)) - 1
-    accuracy = np.exp(np.sqrt(np.mean(r)**2 +
-    np.std(r)**2)) - 1
-    return mean_oc, precision, accuracy
-
-def plot_and_save(storm_str, swarm_str, model, avg_times, moa_avg, moa_upper, moa_lower, msis_avg, msis_avg_21, swarm_avg, start_date, end_date):
+def plot_and_save(storm_str, swarm_str, version, avg_times, msis_avg, swarm_avg, start_date, end_date):
     """
     Docstring for plot_and_save: plots results and saves
     statistics to results file.
@@ -350,80 +322,25 @@ def plot_and_save(storm_str, swarm_str, model, avg_times, moa_avg, moa_upper, mo
     :param start_date: start date of storm period
     :param end_date: end date of strom period
     """
-    fig = plt.figure(figsize=(9, 6))
-    ax_ap = fig.add_axes([0.1, 0.1, 0.87, 0.87])
+    fig = plt.figure(figsize=(13, 6))
+    ax = plt.gca()  # Get Current Axes
     size = 14
-
-    bbox = ax_ap.get_position()
-    x_center = bbox.x0 + bbox.width / 2
-
-    # month_dict = {"MAR": "03", "APR": "04", "MAY": "05", "AUG": "08", "SEP": "09", "OCT": "10"}
-    # m,y = storm_str.split('_')
-    # storm_fig_str = f"{month_dict.get(m, None)}-{y}"
-    # fig.text(x_center, 0.98, f"{storm_fig_str} SWARM-{swarm_str}: Orbit-averaged Nuetral Densities",
-    #     ha='center', va='top', fontsize=size, fontweight='bold')
     
-    # ax_ap.plot(avg_times, msis_avg_21, linewidth = 3, color='green', label="NRLMSIS 2.1")
-    ax_ap.plot(avg_times, swarm_avg, color='black', linewidth=3, label=f'SWARM-{swarm_str}')
-    ax_ap.plot(avg_times, msis_avg , linewidth=3, color='blue', label=model["label"])
-    ax_ap.plot(avg_times, moa_avg , color='red', linewidth=3, label='MOA')
-    ax_ap.fill_between(avg_times, moa_lower, moa_upper, color='red', alpha = 0.25, label='MOA IQR')
-    # ax_ap.plot(avg_times, moa_mean_avg, color='orange', linewidth=3, label='MOA-2 MEAN')
-    # ax_ap.plot(avg_times, moa_weight_mean_avg, color='purple', linewidth=3, label='MOA-2 WEIGHT MEAN')
-    ax_ap.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax_ap.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-    ax_ap.tick_params(labelsize=size)
-    ax_ap.set_xlabel("Real Time", fontweight='bold', fontsize=size)
-    ax_ap.set_ylabel(r"Density (kg/m$\mathbf{^3}$)", fontweight='bold', fontsize=size)
-    ax_ap.set_xlim(start_date, end_date)
-    ax_ap.legend(loc='upper left', frameon=False, fontsize=size)
-    fig.savefig(f'/home/hennyc/data/{storm_str}/Results/swarm{swarm_str}.png', dpi=300)
-    # plt.show()
-    # plt.close(fig)
+    ax.plot(avg_times, msis_avg , color='blue', linewidth=4, label='NRLMSISE-00')
+    ax.plot(avg_times, swarm_avg, color='black', linewidth=4, label=f'Swarm {swarm_str}')
+    ax.axvline(x=start_date + np.timedelta64(20, 'D'), color='black', linestyle='--')
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=4))  # every day
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    ax.tick_params(labelsize=size)
+    ax.set_xlabel("Real Time", fontweight='bold', fontsize=size)
+    ax.set_ylabel(r"Density (kg/m$\mathbf{^3}$)", fontweight='bold', fontsize=size)
+    ax.set_xlim(start_date, end_date)
+    ax.legend(loc='upper left', frameon=False, fontsize=size)
 
-    # msis21_dp = delta_p(msis_avg_21, swarm_avg)
-    # msis_dp = delta_p(msis_avg, swarm_avg)
-    # moa_dp = delta_p(moa_avg, swarm_avg)
-    
-    # msis21_rmse = np.sqrt(np.mean((np.array(swarm_avg) - np.array(msis_avg_21)) ** 2)) 
-    # msis_rmse = np.sqrt(np.mean((np.array(swarm_avg) - np.array(msis_avg)) ** 2)) 
-    # moa_rmse = np.sqrt(np.mean((np.array(swarm_avg) - np.array(moa_avg)) ** 2)) 
-    # # moa_rmse_2 = np.sqrt(np.mean((np.array(swarm_avg) - np.array(moa_mean_avg)) ** 2)) 
+    plt.tight_layout()
+    fig.savefig(f'/home/hennyc/data/{storm_str}/Results/visualization.png', dpi=300)
+    plt.close(fig)
 
-    # msis21_rhot = rho_t(msis_avg_21, avg_times)
-    # msis_rhot = rho_t(msis_avg, avg_times)
-    # moa_rhot = rho_t(moa_avg, avg_times)
-    # swarm_rhot = rho_t(swarm_avg, avg_times)
-
-    print("MSIS-00  MAPE : " + str(round(calc_mape(swarm_avg, msis_avg), 3)) + "\n")
-    print("MSIS-00  OC   : " + str(calc_oc(swarm_avg, msis_avg)) + "\n")
-    # print("MSIS 2.1 MAPE : " + str(round(calc_mape(swarm_avg, msis_avg_21), 3)) + "\n")
-    print("MOA MAPE      : " + str(round(calc_mape(swarm_avg, moa_avg), 3)) + "\n")
-    print("MOA OC        : " + str(calc_oc(swarm_avg, moa_avg)) + "\n")
-
-    with open(f'/home/hennyc/data/{storm_str}/Results/swarm{swarm_str}_results.txt', "w") as f:
-        f.write("------------\n")
-        f.write("MSIS-00  MAPE : " + str(round(calc_mape(swarm_avg, msis_avg), 3)) + "\n")
-        f.write("MSIS-00  OC   : " + str(calc_oc(swarm_avg, msis_avg)) + "\n")
-        # f.write("MSIS 2.1 MAPE : " + str(round(calc_mape(swarm_avg, msis_avg_21), 3)) + "\n")
-        f.write("MOA MAPE      : " + str(round(calc_mape(swarm_avg, moa_avg), 3)) + "\n")
-        f.write("MOA MAPE      : " + str(calc_oc(swarm_avg, moa_avg)) + "\n")
-    #     f.write(f"{model['label']} Dp : " + str(round(msis_dp, 2)) + "\n")
-    #     f.write("NRLMSIS 2.1 Dp  : " + str(round(msis21_dp, 2)) + "\n")
-    #     f.write("MOA-2 Dp        : " + str(round(moa_dp, 2)) + "\n")
-    #     f.write("Reduction in Dp : " + str(round((msis_dp - moa_dp) / msis_dp * 100, 2)) + "\n")
-    #     f.write("--\n")
-    #     f.write(f"{model['label']} RMS Error : " + f"{msis_rmse:.4e}" + "\n")
-    #     f.write("NRLMSIS 2.1 RMS Error : " + f"{msis21_rmse:.4e}" + "\n")
-    #     f.write("MOA-2 RMS Error       : " + f"{moa_rmse:.4e}" + "\n")
-    #     f.write("Reduction             : " + str(round((msis_rmse - moa_rmse) / msis_rmse * 100, 4)) + "\n")
-    #     f.write("--\n")
-    #     f.write(f"{model['label']} rhot : " + str(round(msis_rhot, 2)) + "\n")
-    #     f.write("NRLMSIS 2.1 rhot : " + str(round(msis21_rhot, 2)) + "\n")
-    #     f.write("MOA-2 rhot        : " + f"{moa_rhot:.4e}" + "\n")
-    #     f.write("SWARM rhot        : " + f"{swarm_rhot:.4e}" + "\n")
-    #     f.write("Reduction         : " + str(round((abs(swarm_rhot - msis_rhot) - abs(swarm_rhot - moa_rhot)) / abs(swarm_rhot - msis_rhot) * 100, 4)) + "\n")
-    #     f.write("------------\n")
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
@@ -433,7 +350,6 @@ if __name__ == "__main__":
     storm = sys.argv[1].upper()
     swarm = sys.argv[2].upper()
     model = sys.argv[3].upper()
-
 
     if swarm not in ("A", "B"):
         print("<Swarm> must be 'A' or 'B'")
@@ -445,32 +361,17 @@ if __name__ == "__main__":
         print("Usage: python msis.py <Storm> <Swarm> <NRLMSIS Model>")
         sys.exit(1)
 
-    model_info = {
-        "MSISE90": {"version": 90, "label": "MSISE-90"},
-        "NRLMSISE00": {"version": 0,  "label": "NRLMSISE-00"},
-        "MSIS21": {"version": 2.1, "label": "NRLMSIS 2.1"},
-    }
-
-    model = model.strip().upper()
-    if model not in model_info:
-        raise ValueError(f"Invalid MSIS model: {model}")
-    model = model_info[model]
 
     base_path = "/home/hennyc"
     date_file = f"{base_path}/data/{storm}/DATES.txt"
     with open(date_file, "r") as file:
-        _, _, _ = file.readline().strip().split(",")
-        _, start_str, end_str = file.readline().strip().split(",")
+        _, start_str, _ = file.readline().strip().split(",")
+        _, _, end_str = file.readline().strip().split(",")
 
-    start_date = np.datetime64(start_str) + np.timedelta64(1, 'D')
-    end_date = np.datetime64(end_str) - np.timedelta64(1, 'D')
+    start_date = np.datetime64(start_str)
+    end_date = np.datetime64(end_str)
 
     msis_file = f"{base_path}/gmat-git/GMAT/data/atmosphere/earth/SpaceWeather-All-v1.2.txt"
-    moa_file = f"{base_path}/data/{storm}/WEATHER.txt"
-    moa_l_file = f"{base_path}/data/{storm}/WEATHER_MEAN_LOWER.txt"
-    moa_h_file = f"{base_path}/data/{storm}/WEATHER_MEAN_UPPER.txt"
-    # moa_mean_file = f"{base_path}/data/{storm}/WEATHER_MEAN.txt"
-    # moa_weight_mean_file = f"{base_path}/data/{storm}/WEATHER_WEIGHT_MEAN.txt"
     swarm_file = f"{base_path}/data/{storm}/DENSITY_DATA/SWARM{swarm}.txt"
 
     # Start Comparison
@@ -490,21 +391,10 @@ if __name__ == "__main__":
     arg_lat = np.array(arg_lat)
 
     # Run MSIS
-    moa_density, _ = run_msis(moa_file, swarm_data, model, start_date, end_date)
-    moa_l_density, _ = run_msis(moa_l_file, swarm_data, model, start_date, end_date)
-    moa_h_density, _ = run_msis(moa_h_file, swarm_data, model, start_date, end_date)
-    # moa_mean_density, _ = run_msis(moa_mean_file, swarm_data, model, start_date, end_date)
-    # moa_weight_mean_density, _ = run_msis(moa_weight_mean_file, swarm_data, model, start_date, end_date)
-    msis_density, msis_density_21 = run_msis(msis_file, swarm_data, model, start_date, end_date)
+    msis_density = run_msis(msis_file, swarm_data, model, start_date, end_date)
 
     avg_times, swarm_avg, _ = compute_orbit_averages(arg_lat, swarm_density, times)
-    _, moa_avg, _ = compute_orbit_averages(arg_lat, moa_density, times)
-    _, moa_l_avg, _ = compute_orbit_averages(arg_lat, moa_l_density, times)
-    _, moa_h_avg, _ = compute_orbit_averages(arg_lat, moa_h_density, times)
-    # _, moa_mean_avg, _ = compute_orbit_averages(arg_lat, moa_mean_density, times)
-    # _, moa_weight_mean_avg, _ = compute_orbit_averages(arg_lat, moa_weight_mean_density, times)
     _, msis_avg, _ = compute_orbit_averages(arg_lat, msis_density, times)
-    _, msis_avg_21, _ = compute_orbit_averages(arg_lat, msis_density_21, times)
 
-    plot_and_save(storm, swarm, model, avg_times, moa_avg, moa_h_avg, moa_l_avg, msis_avg, msis_avg_21, swarm_avg, 
+    plot_and_save(storm, swarm, model, avg_times, msis_avg, swarm_avg, 
                   start_date, end_date)

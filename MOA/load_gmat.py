@@ -10,7 +10,8 @@ from os import path
 
 apistartup = "api_startup_file.txt"
 # GmatInstall = "/home/hennyc/gmat-web/GMAT"
-GmatInstall = "/home/hennyc/gmat-git/GMAT"
+# GmatInstall = "/home/hennyc/gmat-git/GMAT"
+GmatInstall = "/home/hennyc/gmat-git_two/GMAT-R2026a-Linux-x64"
 GmatBinPath = GmatInstall + "/bin"
 Startup = GmatBinPath + "/" + apistartup
 

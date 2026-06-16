@@ -19,11 +19,14 @@ Usage:
 
 # imports
 from scipy.optimize import minimize_scalar
+from scipy.signal import savgol_filter
+import matplotlib.dates as mdates
 from multiprocessing import Pool, cpu_count
-from scipy.ndimage import gaussian_filter1d
-from scipy.stats import linregress
+from scipy.interpolate import UnivariateSpline
+from datetime import timedelta
 from collections import defaultdict
 from datetime import datetime
+import matplotlib.pyplot as plt
 from load_gmat import *
 from tqdm import tqdm
 import numpy as np
@@ -33,178 +36,361 @@ import os
 import re
 import shutil
 import tempfile
+import argparse
 
-def read_tle_file(storm, file, start_date, end_date, sigma):
+def get_tle_data(file, sat_ids, start_date, end_date):
     """
-    Docstring for read_tle_file: Reads, filters TLE data from .json file.
-    
-    :param storm: identifier for the current storm (used for plotting data if needed)
-    :param file: path to the TLE JSON file
-    :param start_date: start date for MOPT analysis
-    :param end_date: end date for MOPT analysis
-    :param sigma: Threshold for standard deviation to identify TLE outliers. 
-                  These outliers are removed.
+    TLE data processing
+
+    - date filtering
+    - ensures chronological sorting
+    - duplicate removal
+    - minimum 5 points
+
+    Returns:
+    dict:
+        sat_id: [cleaned TLE entries]
     """
+
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
 
     with open(file, 'r') as f:
         tle_data = json.load(f)
 
+    # Only keep requested spacecraft
+    sat_ids = set(sat_ids)
     raw_data = defaultdict(list)
+
     for entry in tle_data:
-        name = entry["NORAD_CAT_ID"]
-        raw_data[name].append(entry)
+        sat_id = entry["NORAD_CAT_ID"]
+        if sat_id in sat_ids:
+            raw_data[sat_id].append(entry)
 
-    filtered_data = defaultdict(list)
-    sma_times = []
-    sma_values = []
-    ids = []
+    filtered_data = {}
 
-    for id in tqdm(raw_data.keys(), desc="Filtering"):
-        tle_list = raw_data[id]
-        epochs = []
-        tle_sma = []
-        tle_time = []
-        valid = []
+    for sat_id in tqdm(raw_data.keys(), desc="Filtering"):
 
-        for i in tle_list:
-            dt = pd.to_datetime(i['EPOCH'])
-            too_close = any(abs((dt - existing).total_seconds()) < 0.5 * 3600 for existing in epochs)
-            if too_close:
-                continue
-            epochs.append(dt)
+        tle_list = raw_data[sat_id]
 
-            epoch = np.datetime64(i['EPOCH'])
+        # Filter by date
+        pre_filtered = []
+        for entry in tle_list:
+            epoch = pd.to_datetime(entry["EPOCH"])
             if start_date <= epoch <= end_date:
-                tle_sma.append(float(i['SEMIMAJOR_AXIS']))
-                tle_time.append((epoch - start_date) / np.timedelta64(1, 'D'))
-                valid.append(i)
+                pre_filtered.append((epoch, entry))
 
-        if len(tle_sma) < int(((end_date - start_date) / np.timedelta64(1, 'D'))/8):
+        # Sort chronologically
+        pre_filtered.sort(key=lambda x: x[0])
+
+        # Remove duplicate epochs 
+        unique_epochs = set()
+        cleaned = []
+        for epoch, entry in pre_filtered:
+            if epoch not in unique_epochs:
+                unique_epochs.add(epoch)
+                cleaned.append((epoch, entry))
+
+        # Remove duplicates if not exact epoch
+        final = []
+        last_time = None
+
+        for epoch, entry in cleaned:
+            if last_time is None or (epoch - last_time).total_seconds() >= 5:
+                final.append(entry)
+                last_time = epoch
+
+        # At least 5 points
+        if len(final) < 5:
             continue
 
-        sma_times.append(np.array(tle_time))
-        sma_values.append(np.array(tle_sma))
-        ids.append((id, valid))
-
-    filtered_sma_times = []
-    filtered_sma_values = []
-    filtered_dsma_values = []
-
-    for t, s in zip(sma_times, sma_values):
-        dsma = np.gradient(s, t)
-        min_val = dsma.min()
-        if min_val == 0:
-            continue  
-
-        dsma_norm = dsma / abs(min_val)
-
-        if np.any(dsma_norm > 0):
-            continue  
-
-        filtered_sma_times.append(t)
-        filtered_sma_values.append(s)
-        filtered_dsma_values.append(dsma_norm)
-
-    sma_times = filtered_sma_times
-    sma_values = filtered_sma_values
-    dsma_values = filtered_dsma_values
-
-    all_times = np.concatenate(sma_times)
-    t_min = np.floor(all_times.min())
-    t_max = np.ceil(all_times.max())
-    bin_edges = np.arange(t_min, t_max + 0.125, 0.125)
-
-    bin_stats = []
-    for left, right in zip(bin_edges[:-1], bin_edges[1:]):
-        bin_vals = []
-        for times_arr, dsma_arr in zip(sma_times, dsma_values):
-            mask = (times_arr >= left) & (times_arr < right)
-            bin_vals.extend(dsma_arr[mask])
-        if bin_vals:
-            median = np.median(bin_vals)
-            std = np.std(bin_vals)
-            bin_stats.append((median, std))
-        else:
-            bin_stats.append((np.nan, np.nan))
-
-    for (id, valid_tle), times_arr, dsma_arr in zip(ids, sma_times, dsma_values):
-        outlier = False
-        for t, val in zip(times_arr, dsma_arr):
-            bin_idx = np.searchsorted(bin_edges, t, side='right') - 1
-            if 0 <= bin_idx < len(bin_stats):
-                median, std = bin_stats[bin_idx]
-                if not np.isnan(median) and std > 0:
-                    lower = median - sigma * std
-                    upper = median + sigma * std
-                    if not (lower <= val <= upper):
-                        outlier = True
-                        break
-        if not outlier:
-            filtered_data[id].extend(valid_tle)
+        filtered_data[sat_id] = final
 
     return filtered_data
+
+def find_spacecraft(file1, file2, start_date, mid_date, end_date, sigma, cygnss):
+    """
+    Reads data, filteres by dsma < 0 and sigma bounds
+
+    """
+
+    start_date = pd.to_datetime(start_date)
+    mid_date = pd.to_datetime(mid_date)
+    end_date = pd.to_datetime(end_date)
+
+    with open(file1, 'r') as f:
+        data1 = json.load(f)
+
+    with open(file2, 'r') as f:
+        data2 = json.load(f)
+
+    if cygnss:
+        tle_data = data1
+    else:
+        tle_data = data1 + data2
+
+    # Group by NORAD CATALOG ID
+    raw_data = defaultdict(list)
+    for entry in tle_data:
+        raw_data[entry["NORAD_CAT_ID"]].append(entry)
+    
+    total_spacecraft = len(raw_data.keys())
+
+    all_times, all_sma = [], []
+
+    phys_times, phys_dsma, phys_dsma_norm, phys_ids = [], [], [], []
+
+    selected_times, selected_dsma = [], []
+
+    picked_spacecraft = []
+
+    for sat_id in tqdm(raw_data.keys(), desc="Filtering"):
+
+        tle_list = raw_data[sat_id]
+
+        # filter by date
+        pre_filtered = []
+        test_list = []
+        test_list2 = []
+        for entry in tle_list:
+            epoch = pd.to_datetime(entry['EPOCH'])
+            if start_date <= epoch <= end_date:
+                pre_filtered.append((epoch, entry))
+            if start_date <= epoch <= mid_date:
+                test_list.append((epoch, entry))
+            if mid_date <= epoch <= end_date:
+                test_list2.append((epoch, entry))
+
+        if len(test_list) < 5:
+            continue
+
+        if len(test_list2) < 5:
+            continue
+
+        # Sort by time 
+        pre_filtered.sort(key=lambda x: x[0])
+
+        # Remove duplicate data
+        unique_epochs = set()
+        cleaned = []
+        for epoch, entry in pre_filtered:
+            if epoch not in unique_epochs:
+                unique_epochs.add(epoch)
+                cleaned.append((epoch, entry))
+
+        # Remove duplicate data (if epochs dont match exactly)
+        final = []
+        last_time = None
+        for epoch, entry in cleaned:
+            if last_time is None or (epoch - last_time).total_seconds() >= 5:
+                final.append((epoch, entry))
+                last_time = epoch
+        
+        # at least 5 data points
+        if len(final) < 5:
+            continue
+        
+        # extract sma 
+        t = []
+        s = []
+        valid = []
+
+        for epoch, entry in final:
+            t.append((epoch - start_date).total_seconds() / 86400.0)
+            s.append(float(entry['SEMIMAJOR_AXIS']))
+            valid.append(entry)
+        
+        t = np.array(t)
+        s = np.array(s)
+
+        if not cygnss:
+            if np.any(s < 6728) or np.any(s > 6828):
+                continue
+        
+        all_times.append(t)
+        all_sma.append(s)
+
+        # 350 - 450 | e < 0.01 | no debris
+        dsma_t, dsma = get_derivative(t, s, cygnss)
+
+        # if cygnss:
+        #     dsma = dsma * 1000
+        # else:
+
+        dsma_t, dsma = get_spline(dsma_t, dsma, True)
+        dsma = dsma * 1000
+
+            # dsma_t = np.arange(dsma_t[0], dsma_t[-1], 0.01)
+            # dsma = tle_dsma_spline(dsma_t) * 1000
+
+        if np.any(dsma > 0):
+            continue
+            
+        dif = dsma.max() - dsma.min()
+        
+        dsma_norm = (dsma - dsma.min()) / dif
+
+        phys_times.append(dsma_t)
+        phys_dsma.append(dsma)
+        phys_dsma_norm.append(dsma_norm)
+        phys_ids.append((sat_id, valid))
+    
+    print(f"{len(all_times)}/{total_spacecraft} after initial processing")
+    print(f"{len(phys_times)} pass dSMA < 0 filter")
+
+    if len(phys_times) == 0:
+        return []
+
+    global_t_min = min(t_arr[0] for t_arr in phys_times)   
+    global_t_max = max(t_arr[-1] for t_arr in phys_times)  
+    common_t = np.arange(global_t_min, global_t_max, 0.01)
+    interp_dsma = []
+
+    for t_arr, d_arr in zip(phys_times, phys_dsma_norm):
+        try:
+            interp = np.interp(common_t, t_arr, d_arr)
+            interp_dsma.append(interp)
+        except:
+            continue
+
+    interp_dsma = np.array(interp_dsma)
+
+    if interp_dsma.shape[0] == 0:
+        return []
+
+    medians = np.median(interp_dsma, axis=0)
+    stds = np.std(interp_dsma, axis=0)
+
+    upper_bound = medians + sigma * stds
+    lower_bound = medians - sigma * stds
+
+    for (sat_id, _), t_arr, d_arr in zip(phys_ids, phys_times, phys_dsma_norm):
+
+        interp = np.interp(common_t, t_arr, d_arr)
+        outside = (interp < lower_bound) | (interp > upper_bound)
+
+        if not np.any(outside):
+            picked_spacecraft.append(sat_id)
+            selected_times.append(t_arr)
+            selected_dsma.append(d_arr)
+
+    print(f"{len(selected_times)} pass sigma filter")
+
+    # convert t in days to python datetime
+    def to_datetime(t_array):
+        return [start_date + pd.Timedelta(days = float(t)) for t in t_array]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9), sharex=True)
+    axes = axes.flatten()
+    size = 14
+
+    # 1. SMA (all)
+    for t, s in zip(all_times, all_sma):
+        if cygnss:
+            axes[0].plot(to_datetime(t), s, 'k-', alpha=1)
+        else:
+            axes[0].plot(to_datetime(t), s, 'k-', alpha=0.05)
+    axes[0].set_ylabel("SMA (km)", fontweight='bold', fontsize = size)
+    axes[0].set_title(f"(a) TLE data for all {len(all_sma)} spacecraft", fontweight='bold', fontsize=size)
+
+    # 2. dSMA (all)
+    for t, d in zip(phys_times, phys_dsma):
+        if cygnss:
+            axes[1].plot(to_datetime(t), d, 'k-', alpha=1)
+        else:
+            axes[1].plot(to_datetime(t), d / 1000, 'k-', alpha=0.1)
+    axes[1].set_ylabel("dSMA (km/day)", fontweight='bold', fontsize=size)
+    axes[1].set_title("(b) Spacecraft with dSMA < 0", fontweight='bold', fontsize=size)
+
+    # 3. Normalized dSMA (all)
+    for t, d in zip(phys_times, phys_dsma_norm):
+        if cygnss:
+            axes[2].plot(to_datetime(t), d, 'k-', alpha=1)
+        else:
+            axes[2].plot(to_datetime(t), d, 'k-', alpha=0.1)
+
+    bin_times = to_datetime(common_t)
+    axes[2].plot(bin_times, upper_bound, 'r-', linewidth=1, label='+ 1σ')
+    axes[2].plot(bin_times, lower_bound, 'r-', linewidth=1, label='- 1σ')
+
+    axes[2].set_ylabel("Normalized dSMA", fontweight='bold', fontsize=size)
+    axes[2].set_title(f"(c) Spacecraft within {sigma}σ of median", fontweight='bold', fontsize=size)
+    # axes[2].legend(fontsize=size)
+
+    # 4. Normalized dSMA (filtered only)
+    for t, d in zip(selected_times, selected_dsma):
+        if cygnss:
+            axes[3].plot(to_datetime(t), d, 'k-', alpha = 1)
+        else:
+            axes[3].plot(to_datetime(t), d, 'k-', alpha = 0.75)
+
+    axes[3].set_ylabel("Normalized dSMA", fontweight='bold', fontsize=size)
+    axes[3].set_title(f"(d) Selected {len(selected_dsma)} spacecraft", fontweight='bold', fontsize=size)
+    axes[2].set_xlabel("Real Time", fontweight='bold', fontsize=size)
+    axes[3].set_xlabel("Real Time", fontweight='bold', fontsize=size)
+
+    for ax in axes:
+        ax.tick_params(axis='both', labelsize=size)
+        ax.set_xlim(start_date, end_date)
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=4))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    
+    plt.tight_layout()
+
+    if cygnss:
+        plt.savefig(f"{BASE_PATH}/Results/mopt_cygnss.png")
+    else:
+        plt.savefig(f"{BASE_PATH}/Results/filter.png", dpi=300)
+
+    # plt.show()
+    plt.close(fig)
+
+    return picked_spacecraft
     
 def find_mass(args):
     """
-    Determines the mass (essentially the ballistic coefficeint) for given satellite.
 
-    Parameters
-    ----------
-    args : tuple
-        Tuple containing the following elements:
-        - tle_data : list of dict
-            TLE data for the satellite. Each dict should have keys such as 'EPOCH',
-            'SEMIMAJOR_AXIS', 'ECCENTRICITY', 'INCLINATION', 'RA_OF_ASC_NODE',
-            'ARG_OF_PERICENTER', and 'MEAN_ANOMALY'.
-        - sat_id : str or int
-            Unique identifier for the satellite.
-        - start_date : datetime64
-            Start of the analysis period.
-        - end_date : datetime64
-            End of the analysis period.
-        - tol : float
-            Tolerance for the optimizer.
-        - max_iter : int
-            Maximum number of iterations for the optimizer.
-        - gmat_template : str
-            Path to the GMAT template script to use for propogation.
-
-    Returns
-    -------
-    float or bool
-        - Estimated satellite dry mass (float) if the optimization succeeds.
-        - False if there is insufficient TLE data (<5 points) or if the optimizer fails.
-
-    Notes
-    -----
-    - Delta-SMA (dSMA) is computed in km/year.
-    - Temporary GMAT scripts and directories are automatically removed after optimization.
-    - The function uses 'minimize_scalar' from SciPy to perform bounded optimization.
     """
+    # determine tle_dsma and tle_time
+    tle_data, sat_id, start_date, end_date, tol, max_iter, gmat_template, cygnss = args
 
-    # Sorting TLE_DATA
-    tle_data, sat_id, start_date, end_date, tol, max_iter, gmat_template = args
-    epochs = np.array([x['EPOCH'] for x in tle_data], dtype='datetime64')
-    ind = np.argsort(epochs)
-    sorted_tle_data = [tle_data[i] for i in ind]
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
 
-    # Find TLE dSMA
-    tle_sma, tle_time, filtered_sorted_tle_data = [], [], []
-    for i in sorted_tle_data:
-        epoch = np.datetime64(i['EPOCH'])
-        if (start_date <= epoch <= end_date):
-            tle_sma.append(float(i['SEMIMAJOR_AXIS']))
-            filtered_sorted_tle_data.append(i)
+    tle_sma_t = []
+    tle_sma = []
+
+    for entry in tle_data:
+        epoch = pd.to_datetime(entry['EPOCH'])
+        tle_sma_t.append((epoch - start_date).total_seconds() / 86400.0)
+        tle_sma.append(float(entry["SEMIMAJOR_AXIS"]))
+        if not start_date <= epoch <= end_date:
+            print("TLE DATA out of range - shouldn't happen")
+            sys.exit()
     
-    if len(filtered_sorted_tle_data) < 5:
-        return False
-    
-    start = np.datetime64(filtered_sorted_tle_data[0]['EPOCH'])
-    for i in filtered_sorted_tle_data:
-        epoch = np.datetime64(i['EPOCH'])
-        tle_time.append((epoch - start) / np.timedelta64(1, 'D'))
-    
-    tle_dsma = np.gradient(tle_sma, tle_time) * 365 #km/year
+    tle_sma_t = np.array(tle_sma_t)
+    tle_sma = np.array(tle_sma)
+
+    # if not cygnss:
+
+    tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, cygnss)
+
+    tle_dsma_t, tle_dsma = get_spline(tle_dsma_t, tle_dsma, False)
+    tle_dsma = tle_dsma * 1000
+
+    # else:
+    #     tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, True)
+    #     tle_dsma = tle_dsma * 1000
+
+    #     tle_dsma = np.interp(np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01), tle_dsma_t, tle_dsma)
+    #     tle_dsma_t = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
+
+    # median = np.median(tle_dsma)
+    # std = np.std(tle_dsma)
+    # weights = np.where((tle_dsma < median) & (np.abs(tle_dsma - median) > std), 1000, 10)
+    # tle_dsma_spline = UnivariateSpline(tle_dsma_t, tle_dsma, w=weights, s = 0)
+    # tle_dsma_t = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
+    # tle_dsma = tle_dsma_spline(tle_dsma_t) * 1000
 
     # Prepare TEMP GMAT SCRIPT and Directory
     base_temp_folder = "/home/hennyc/temp"
@@ -217,19 +403,19 @@ def find_mass(args):
         script = f.read()
     
     # Prepare GMAT Script for propogation
-    epoch = datetime.strptime(filtered_sorted_tle_data[0]['EPOCH'], "%Y-%m-%dT%H:%M:%S.%f")
+    epoch = datetime.strptime(tle_data[0]['EPOCH'], "%Y-%m-%dT%H:%M:%S.%f")
     epoch_string = epoch.strftime("%d %b %Y %H:%M:%S.") + f"{epoch.microsecond // 1000:03d}"
     values = {
         'EPOCH_VAL': epoch_string,
-        'SMA_VAL': float(filtered_sorted_tle_data[0]['SEMIMAJOR_AXIS']),
-        'ECC_VAL': float(filtered_sorted_tle_data[0]['ECCENTRICITY']),
-        'INC_VAL': float(filtered_sorted_tle_data[0]['INCLINATION']),
-        'RAAN_VAL': float(filtered_sorted_tle_data[0]['RA_OF_ASC_NODE']),
-        'AOP_VAL': float(filtered_sorted_tle_data[0]['ARG_OF_PERICENTER']),
-        'MA_VAL': float(filtered_sorted_tle_data[0]['MEAN_ANOMALY']),
+        'SMA_VAL': float(tle_data[0]['SEMIMAJOR_AXIS']),
+        'ECC_VAL': float(tle_data[0]['ECCENTRICITY']),
+        'INC_VAL': float(tle_data[0]['INCLINATION']),
+        'RAAN_VAL': float(tle_data[0]['RA_OF_ASC_NODE']),
+        'AOP_VAL': float(tle_data[0]['ARG_OF_PERICENTER']),
+        'MA_VAL': float(tle_data[0]['MEAN_ANOMALY']),
         'FILENAME_VAL': output_path,
-        'LENGTH_VAL': round(((np.datetime64(filtered_sorted_tle_data[-1]['EPOCH']) - np.datetime64
-                              (filtered_sorted_tle_data[0]['EPOCH'])) / np.timedelta64(1, 'D')),8)
+        'LENGTH_VAL': round(((np.datetime64(tle_data[-1]['EPOCH']) - np.datetime64
+                              (tle_data[0]['EPOCH'])) / np.timedelta64(1, 'D')),8)
     }
 
     for key, val in values.items():
@@ -240,8 +426,8 @@ def find_mass(args):
 
     # Bounded optimization to minimize the RMS error by changing the mass
     result = minimize_scalar(
-        lambda mass: rms_error(mass, script_path, output_path, tle_time, tle_dsma),
-        bounds=(0.1, 1000),
+        lambda mass: rms_error(mass, script_path, output_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma),
+        bounds=(0.1, 10000),
         method='bounded',
         options={'xatol': tol, 'maxiter': max_iter}
     )
@@ -250,35 +436,208 @@ def find_mass(args):
     if result.success:
         return result.x
     else:
-        return False
+        return None
+    
+# def find_mass(args):
+#     """
 
-def rms_error(mass, script_path, output_path, tle_time, tle_dsma):
+#     """
+#     # determine tle_dsma and tle_time
+#     tle_data, sat_id, start_date, end_date, tol, max_iter, gmat_template, cygnss = args
+
+#     start_date = pd.to_datetime(start_date)
+#     end_date = pd.to_datetime(end_date)
+
+#     tle_sma_t = []
+#     tle_sma = []
+
+#     for entry in tle_data:
+#         epoch = pd.to_datetime(entry['EPOCH'])
+#         tle_sma_t.append((epoch - start_date).total_seconds() / 86400.0)
+#         tle_sma.append(float(entry["SEMIMAJOR_AXIS"]))
+#         if not start_date <= epoch <= end_date:
+#             print("TLE DATA out of range - shouldn't happen")
+#             sys.exit()
+    
+#     tle_sma_t = np.array(tle_sma_t)
+#     tle_sma = np.array(tle_sma)
+
+#     tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, cygnss)
+
+#     tle_dsma = tle_dsma * 1000
+
+#     # Prepare TEMP GMAT SCRIPT and Directory
+#     base_temp_folder = "/home/hennyc/temp"
+#     os.makedirs(base_temp_folder, exist_ok=True)
+
+#     temp_dir = tempfile.mkdtemp(prefix=f'gmat_{sat_id}_', dir=base_temp_folder)
+#     script_path = os.path.join(temp_dir, f'gmat_sat_{sat_id}.script')
+#     output_path = os.path.join(temp_dir, f'output_{sat_id}.txt')
+#     with open(gmat_template, 'r') as f:
+#         script = f.read()
+    
+#     # Prepare GMAT Script for propogation
+#     epoch = datetime.strptime(tle_data[0]['EPOCH'], "%Y-%m-%dT%H:%M:%S.%f")
+#     epoch_string = epoch.strftime("%d %b %Y %H:%M:%S.") + f"{epoch.microsecond // 1000:03d}"
+#     values = {
+#         'EPOCH_VAL': epoch_string,
+#         'SMA_VAL': float(tle_data[0]['SEMIMAJOR_AXIS']),
+#         'ECC_VAL': float(tle_data[0]['ECCENTRICITY']),
+#         'INC_VAL': float(tle_data[0]['INCLINATION']),
+#         'RAAN_VAL': float(tle_data[0]['RA_OF_ASC_NODE']),
+#         'AOP_VAL': float(tle_data[0]['ARG_OF_PERICENTER']),
+#         'MA_VAL': float(tle_data[0]['MEAN_ANOMALY']),
+#         'FILENAME_VAL': output_path,
+#         'LENGTH_VAL': round(((np.datetime64(tle_data[-1]['EPOCH']) - np.datetime64
+#                               (tle_data[0]['EPOCH'])) / np.timedelta64(1, 'D')),8)
+#     }
+
+#     for key, val in values.items():
+#         script = script.replace(key, str(val))
+        
+#     with open(script_path, 'w') as f:
+#         f.write(script)
+
+#     # Bounded optimization to minimize the RMS error by changing the mass
+#     result = minimize_scalar(
+#         lambda mass: rms_error(mass, script_path, output_path, tle_sma_t, tle_dsma_t, tle_dsma),
+#         bounds=(0.1, 1000),
+#         method='bounded',
+#         options={'xatol': tol, 'maxiter': max_iter}
+#     )
+
+#     shutil.rmtree(temp_dir)
+#     if result.success:
+#         return result.x
+#     else:
+#         return None
+
+def get_derivative(x_arr, y_arr, cygnss):
+    x_mid = (x_arr[:-1] + x_arr[1:]) / 2
+    dsma = (y_arr[1:] - y_arr[:-1]) / (x_arr[1:] - x_arr[:-1])
+    if cygnss:        
+        mask = dsma <= 0 
+        x_mid = x_mid[mask]
+        dsma = dsma[mask]
+    return np.array(x_mid), np.array(dsma)
+    
+def create_plot(spacecraft_name, start_date,
+                tle_time, tle_sma, tle_dsma,
+                gmat_time, gmat_sma,
+                gmat_spline, gmat_dsma,
+                tle_spline, tle_time_spline):
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 9), sharex=True)
+
+    # top
+    t_dense = np.linspace(min(tle_time), max(tle_time), 500)
+    tle_smooth = tle_spline(t_dense)
+
+    gmat_dense = np.linspace(min(gmat_time), max(gmat_time), 500)
+    gmat_smooth = gmat_spline(gmat_dense)
+
+    ax1.scatter(tle_time, tle_sma,
+                marker='s', s=100, color='black', label='TLE')
+
+    # TLE spline
+    ax1.plot(t_dense, tle_smooth,
+             color='green', linewidth=3, label='TLE Cubic Spline Fit')
+
+    # Once-per-orbit GMAT points
+    ax1.scatter(gmat_time, gmat_sma, marker='o',
+                color='blue', s=64, label='Propogated (Orbit-Averaged)')
+
+    # GMAT spline (change color to green like TLE spline)
+    ax1.plot(gmat_dense, gmat_smooth,
+             color='red', linewidth=3,
+             label='Propagated Cubic Spline Fit')
+
+    ax1.set_ylabel("SMA (km)", fontweight='bold')
+
+    handles, labels = ax1.get_legend_handles_labels()
+    unique = dict(zip(labels, handles))
+    ax1.legend(unique.values(), unique.keys(),
+               loc='upper right', framealpha=1, fontsize=10)
+
+    # bottom
+    tle_dsma_year = tle_dsma
+    gmat_dsma_year = gmat_dsma
+
+    ax2.plot(tle_time_spline, tle_dsma_year,
+             linestyle='-',
+             color='black', linewidth=3, label='TLE')
+
+    ax2.plot(tle_time_spline, gmat_dsma_year,
+             linestyle='-', 
+             color='red', linewidth=3, label='Propagated')
+
+    ax2.invert_yaxis()
+    ax2.set_ylabel("dSMA (km/day)", fontweight='bold')
+    ax2.set_xlabel("Date (2024)", fontweight='bold')
+    ax2.set_xlim(0, 10)
+    ax2.legend(loc='upper right', framealpha=1, fontsize=11)
+
+    tick_positions = np.arange(0, 11)
+    custom_labels = [(start_date + timedelta(days=int(i))).strftime("%m-%d")
+                     for i in tick_positions]
+    ax2.set_xticks(tick_positions)
+    ax2.set_xticklabels(custom_labels)
+
+    fig.suptitle(spacecraft_name + ": Propogated Trajectory and TLE Analysis for October 2024 Storm",
+                 fontsize=14, fontweight='bold')
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    # plt.show()
+
+# def rms_error(mass, script_path, output_path, tle_sma_t, tle_dsma_t, tle_dsma):
+#     """
+
+#     """
+#     try:
+#         gmat.LoadScript(script_path)
+#         sat = gmat.GetObject("Sat")
+#         sat.SetField("DryMass", mass)
+#         gmat.Initialize()
+#         status = gmat.Execute()
+#         if status != 1:
+#             return np.nan
+#     except Exception as _:
+#         return np.nan
+#     finally:
+#         gmat.Clear()
+    
+#     # Read Data
+#     output_data = np.loadtxt(output_path, delimiter=',')
+#     time = np.array(output_data[:, 0])
+#     time = time + tle_sma_t[0]
+#     sma = np.array(output_data[:,1])
+
+#     ma = np.mod(output_data[:, 2], 360)
+
+#     wraps = np.diff(ma) < -300 
+#     orbit_id = np.cumsum(np.insert(wraps, 0, False))
+#     counts = np.bincount(orbit_id)
+#     sma_orbit_avg = np.bincount(orbit_id, weights=sma) / counts
+#     time_orbit_avg = np.bincount(orbit_id, weights=time) / counts
+
+#     # combine every k orbits
+#     k = 6
+#     n = len(sma_orbit_avg) // k  
+
+#     sma_orbit_avg = sma_orbit_avg[:n*k].reshape(n, k).mean(axis=1)
+#     time_orbit_avg = time_orbit_avg[:n*k].reshape(n, k).mean(axis=1)
+
+#     gmat_spline = UnivariateSpline(time_orbit_avg, sma_orbit_avg, s = 0)
+#     gmat_times = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
+#     gmat_dsma = gmat_spline.derivative()(gmat_times) * 1000
+
+#     #interplate tle to smooth times via linear interpolation
+#     tle_interp = np.interp(gmat_times, tle_dsma_t, tle_dsma)
+
+#     return np.sqrt(np.mean((tle_interp - gmat_dsma) ** 2))
+
+def rms_error(mass, script_path, output_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma):
     """
-    Determine the RMS error between the modeled trajectory and the TLE
-
-    Parameters
-    ----------
-    mass : float
-        Current Dry mass of the satellite to use in the GMAT simulation.
-    script_path : str
-        Path to the GMAT script file to execute.
-    output_path : str
-        Path to the CSV file generated by GMAT containing time and SMA data.
-    tle_time : array
-        Sequence of TLE times corresponding to the satellite data.
-    tle_dsma : array
-        Sequence of dSMA values derived from TLEs for comparison.
-
-    Returns
-    -------
-    float
-        RMS error between modeled dSMA and TLE dSMA. Returns np.nan if
-        the simulation fails or insufficient data is available for slope calculation.
-
-    Notes
-    -----
-    - Uses Gaussian smoothing on SMA data to reduce noise.
-    - Slope calculation is done via linear regression over each TLE-defined window.
 
     """
     try:
@@ -296,68 +655,136 @@ def rms_error(mass, script_path, output_path, tle_time, tle_dsma):
     
     # Read Data
     output_data = np.loadtxt(output_path, delimiter=',')
-    time = output_data[:, 0]
-    sma = output_data[:,1]
-    gmat_sma_avg = gaussian_filter1d(sma, sigma=120)
-    gmat_dsma = []
-    for i, t in enumerate(tle_time):
-        t_min, t_max = find_window(i, t, tle_time)
-        mask = (time > t_min) & (time < t_max)
-        if np.sum(mask) >= 2:
-            x = time[mask]
-            y = gmat_sma_avg[mask]
-            slope, *_ = linregress(x, y)
-            gmat_dsma.append(slope)
-        else:
-            return np.nan
-    gmat_dsma = np.array(gmat_dsma) * 365
+    time = np.array(output_data[:, 0])
+    time = time + tle_sma_t[0]
+    sma = np.array(output_data[:,1])
+
+
+    # mask = time >= (time[-1] - 1.5/24)
+
+    # return abs(tle_sma[-1] - np.median(sma[mask]))
+
+    ma = np.mod(output_data[:, 2], 360)
+
+    wraps = np.diff(ma) < -300 
+    orbit_id = np.cumsum(np.insert(wraps, 0, False))
+    counts = np.bincount(orbit_id)
+    sma_orbit_avg = np.bincount(orbit_id, weights=sma) / counts
+    time_orbit_avg = np.bincount(orbit_id, weights=time) / counts
+
+    # combine every k orbits
+    k = 5
+    n = len(sma_orbit_avg) // k  
+
+    sma_orbit_avg = sma_orbit_avg[:n*k].reshape(n, k).mean(axis=1)
+    time_orbit_avg = time_orbit_avg[:n*k].reshape(n, k).mean(axis=1)
+    
+
+    gmat_spline = UnivariateSpline(time_orbit_avg, sma_orbit_avg, s = 0)
+    # gmat_times = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
+    gmat_dsma = gmat_spline.derivative()(tle_dsma_t) * 1000
+    gmat_sma = gmat_spline(tle_sma_t)
+    gmat_sma = np.array(gmat_sma)
+
+    # plt.plot(tle_dsma_t, gmat_dsma, label="GMAT")
+    # plt.plot(tle_dsma_t, tle_dsma, label='TLE')
+    # plt.legend()
+    # plt.show()
+
+    dif = tle_sma[0] - gmat_sma[0]
+    gmat_sma = gmat_sma + dif
+
+    # #interplate tle to smooth times via linear interpolation
+    # tle_interp = np.interp(gmat_times, tle_dsma_t, tle_dsma)
 
     return np.sqrt(np.mean((tle_dsma - gmat_dsma) ** 2))
 
-def find_window(i, t, tle_time):
-    """
-    Determine the time window between two consecutive TLEs
+def get_spline(x, y, fopt):
+    y_min = np.min(y)
+    y_max = np.max(y)
+    y_norm = (y - y_min) / (y_max - y_min)
 
-    Parameters:
-    -----------
-    i : int
-        Index of the current TLE in the tle_time list.
-    t : float
-        The time of the current TLE.
-    tle_time : list of float
-        Ordered list of TLE times
+    median = np.median(y_norm)
+    mad = np.median(np.abs(y_norm - median))  # robust scale
+    sigma_robust = 1.4826 * mad          # convert MAD → sigma
 
-    Returns:
-    --------
-    min : float
-        Start of the time window for this TLE.
-    max : float
-        End of the time window for this TLE.
+    mean = np.mean(y_norm)
+    w = np.ones_like(y_norm) * (1.0 / sigma_robust)
+    if fopt:
+        neg_outliers = y_norm < (mean - 2 * sigma_robust)
+        w[neg_outliers] *= 10.0   # tune factor as needed # was 100
+    spline = UnivariateSpline(x, y_norm, w=w, s=len(x))
+    spline_zero = UnivariateSpline(x, y_norm, s = 0)
+    
+    x_ret = np.arange(x[0], x[-1], 0.01)
+    y_ret1 = spline(x_ret)
+    y_ret2 = spline_zero(x_ret)
 
-    Notes:
-    ------
-    - If the current TLE is the first entry, the window extends forward only.
-    - If the current TLE is the last entry, the window extends backward only.
-    - Otherwise, the window extends symmetrically based on neighboring TLEs.
-    """
+    y_ret = (0.5*y_ret1 + 0.5*y_ret2)
 
-    min = 0
-    max = 0
-    if i == 0:
-        right_window = tle_time[2] - tle_time[0]
-        min = t
-        max = t + right_window
-    elif i == len(tle_time)-1:
-        left_window = tle_time[-1] - tle_time[-3]
-        min = t - left_window
-        max = t
-    else:
-        left_window = t - tle_time[i-1]
-        right_window = tle_time[i+1] - t
-        min = t - left_window
-        max = t + right_window
+    return x_ret, y_ret2 * (y_max - y_min) + y_min
 
-    return min, max
+    # mask: keep points within 2 sigma of median
+    # mask = (y >= median) | (y >= median - 2 * sigma_robust)
+    # x_in = x[mask]
+    # y_in = y[mask]
+
+    # sigma = 1.4826 * np.median(np.abs(y_in - np.median(y_in)))
+    
+    # coef = np.polyfit(x_in, y_in, 1)
+    # y_fit = np.polyval(coef, x_in)
+
+    # # residuals and variance
+    # residuals = y_in - y_fit
+    # sigma = np.std(residuals)
+    mean = np.mean(y)
+    w = np.ones_like(y) * (1.0 / sigma_robust)
+
+    # emphasize negative outliers (below mean - 2σ)
+    neg_outliers = y < (mean - 2 * sigma_robust)
+    w[neg_outliers] *= 10.0   # tune factor as needed
+    return UnivariateSpline(x, y, w=w, s=len(x))
+
+def weight_plot(data, start_date, storm):
+    ids = list(data.keys())
+
+    for sat_id in ids:
+        tle_data = data[sat_id]
+
+        tle_sma_t = []
+        tle_sma = []
+
+        # --- build time series ---
+        for entry in tle_data:
+            epoch = pd.to_datetime(entry['EPOCH'])
+            tle_sma_t.append((epoch - start_date).total_seconds() / 86400.0)
+            tle_sma.append(float(entry["SEMIMAJOR_AXIS"]))
+
+        tle_sma_t = np.array(tle_sma_t)
+        tle_sma = np.array(tle_sma)
+
+        # --- derivative ---
+        tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, False)
+
+        spl = UnivariateSpline(tle_dsma_t, tle_dsma, s=0)
+        tle_dsma_t, tle_dsma = get_spline(tle_dsma_t, tle_dsma, True)
+        tle_dsma = tle_dsma * 1000
+
+        # tle_dsma_t = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
+        # tle_dsma = spl2(tle_dsma_t) * 1000
+        tle_dsma2 = spl(tle_dsma_t) * 1000
+
+        if np.any(tle_dsma > 0):
+            continue
+
+        plt.plot(tle_dsma_t, tle_dsma, alpha=1)
+        plt.plot(tle_dsma_t, tle_dsma2, 'k--', alpha = 0.3)
+
+    plt.xlabel("Time")
+    plt.ylabel("dSMA")
+    plt.title("All Selected Spacecraft FOPT/AOPT Splines")
+    plt.savefig(f"{BASE_PATH}/Results/splines.png")
+    # plt.show()
 
 if __name__ == '__main__':
 
@@ -366,78 +793,172 @@ if __name__ == '__main__':
 
     """
 
-    if len(sys.argv) != 3:
-        print("Usage: python mopt.py <month_year> <NRLMSISE Model>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("date")
+    parser.add_argument("model")
+    parser.add_argument("--afrl", action="store_true")
+    args = parser.parse_args()
+    afrl = args.afrl
 
-    storm_name = sys.argv[1]
-    atmospheric_model = sys.argv[2]
+    storm_name = args.date
 
-    if atmospheric_model not in ("MSISE90", "MSIS21"):
-        print("Error: unknown <NRLMSISE Model>. Use MSISE90 or MSIS21")
+    if afrl:
+        STORM_FIGURE_STR = storm_name
+    else:
+        month_dict = {"MAR": "03", "APR": "04", "MAY": "05", "AUG": "08", "SEP": "09", "OCT": "10"}
+        m,y = storm_name.split('_')
+        STORM_FIGURE_STR = f"{month_dict.get(m, None)}-{y}"
+
+    atmospheric_model = args.model
+
+    if atmospheric_model not in ("MSISE90", "NRLMSISE00", "MSIS21"):
+        print("Error: unknown <NRLMSISE Model>. Use MSISE90, NRLMSISE00 or MSIS21")
         print("Usage: python mopt.py <month_year> <NRLMSISE Model>")
         sys.exit(1)
 
     # CYGNSS spacecraft ballistic coefficient
-    cygnss_bc = 0.013
+    cygnss_bc = 0.0130
 
     # Spacecraft filtering (reduces junk TLE data)
-    filter_sigma = 2
+    filter_sigma = 1.5
 
     # Maximum # of iterations for mass determination and mass tolerance
-    max_iterations = 30
-    mass_tolerance = 1 # kg
+    max_iterations = 50
+    mass_tolerance = 0.1 # kg
 
     # define relative file paths
-    base_path = f'/home/hennyc/data/{storm_name}'
-    date_path = f'{base_path}/DATES.txt'
-    tle_path = f'{base_path}/TLE_DATA.json'
-    output_path = f'{base_path}/MOPT_OUTPUT.txt'
+    if afrl:
+        BASE_PATH = f'/home/hennyc/afrl/moa/{storm_name}'
+    else:
+        BASE_PATH = f'/home/hennyc/data/{storm_name}'
+    date_path = f'{BASE_PATH}/DATES.txt'
+    tle_path1 = f'{BASE_PATH}/TLE_DATA_MOPT.json'
+    tle_path2 = f'{BASE_PATH}/TLE_DATA_FOPT.json'
+    output_path = f'{BASE_PATH}/MOPT_OUTPUT.txt'
     gmat_script_path = '/home/hennyc/src/mopt.script'
     ref_path = "/home/hennyc/data/CYGNSS.json"
 
     # Modify mopt.script with inputted atmospheric model
     with open(gmat_script_path, 'r') as f:
         script = f.read()
-    script = re.sub(r"\b(MSISE90|MSIS21)\b", "ATM_MOD_VAL", script)
+    script = re.sub(r"\b(MSISE90|NRLMSISE00|MSIS21)\b", "ATM_MOD_VAL", script)
     script = script.replace("ATM_MOD_VAL", str(atmospheric_model))
     with open(gmat_script_path, 'w') as f:
         f.write(script)
 
     # Determine MOPT start and end date from date file
     with open(date_path, "r") as file:
-        _, start_str_1, end_str_1 = file.readline().strip().split(",")
-        _, _, end_str_2 = file.readline().strip().split(",")
-    start_date, end_date = np.datetime64(start_str_1), np.datetime64(end_str_1)
+        _, start_str_mopt, end_str_mopt = file.readline().strip().split(",")
+        _, start_str_fopt, end_str_fopt = file.readline().strip().split(",")
+    start_date_mopt, end_date_mopt, start_date_fopt, end_date_fopt = np.datetime64(start_str_mopt), np.datetime64(end_str_mopt), np.datetime64(start_str_fopt), np.datetime64(end_str_fopt)
 
     # Read CYGNSS TLE Data
-    ref_data = read_tle_file(storm_name,ref_path, start_date, np.datetime64(end_str_2), 100)
+    ref_ids = find_spacecraft(ref_path, ref_path, start_date_mopt, end_date_mopt, end_date_fopt, 100, True)
+    ref_data = get_tle_data(ref_path, ref_ids, start_date_mopt, end_date_mopt)
 
     # Determine ballistic coefficeint for CYGNSS Spacecraft
-    ref_ids = list(ref_data.keys())
-    ref_args = [(ref_data[ref_id], ref_id, start_date, end_date, mass_tolerance, max_iterations, gmat_script_path) for ref_id in ref_ids]
+    ref_args = [(ref_data[ref_id], ref_id, start_date_mopt, end_date_mopt, mass_tolerance, max_iterations, gmat_script_path, True) for ref_id in ref_ids]
+    
     with Pool(processes=cpu_count()) as pool:
         ref_masses = list(tqdm(pool.imap(find_mass, ref_args), total=len(ref_args), desc="CYGNSS"))
     
+    ref_masses = [r for r in ref_masses if r is not None]
+
     # Determine mass (ballistic coefficient) adjustment
     ref_masses = np.array(ref_masses)
-    ref_masses = np.round(ref_masses,3)
-    ref_median = np.round(np.median(2.2/ref_masses),3)
+    ref_masses = np.round(ref_masses,1)
+    vals = 1 / ref_masses
+    # dif = vals/cygnss_bc
+    # idx = np.argmin(np.abs(dif - 1))
+    # mass_adjustment = dif[idx]
+    # filtered = vals[np.abs(vals - np.median(vals) <= 3 * np.std(vals))]
+    ref_median = np.round(np.median(vals),5)
     mass_adjustment = ref_median/cygnss_bc
+    print(ref_masses)
+    # print(ref_median)
+    print(mass_adjustment)
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # ref_path = "/home/hennyc/data/TANSUO.json"
+    # ref_ids = find_spacecraft(storm_name, ref_path, start_date_mopt, end_date_fopt, 100, True)
+    # ref_data = get_tle_data(ref_path, ref_ids, start_date_mopt, end_date_mopt)
+
+    # # Determine ballistic coefficeint for CYGNSS Spacecraft
+    # ref_args = [(ref_data[ref_id], ref_id, start_date_mopt, end_date_mopt, mass_tolerance, max_iterations, gmat_script_path, True) for ref_id in ref_ids]
+    
+    # with Pool(processes=cpu_count()) as pool:
+    #     ref_masses = list(tqdm(pool.imap(find_mass, ref_args), total=len(ref_args), desc="Tonsua"))
+    
+    # ref_masses = [r for r in ref_masses if r is not None]
+
+    # # Determine mass (ballistic coefficient) adjustment
+    # ref_masses = np.array(ref_masses)
+    # ref_masses = np.round(ref_masses,3)
+    # ref_median = np.round(np.median(1/ref_masses),5)
+    # mass_adjustment = ref_median/0.02760
+    # print(mass_adjustment)
+
+    
+    # ref_path = "/home/hennyc/data/SWAS.json"
+    # ref_ids = find_spacecraft(storm_name, ref_path, start_date_mopt, end_date_fopt, 100, True)
+    # ref_data = get_tle_data(ref_path, ref_ids, start_date_mopt, end_date_mopt)
+
+    # # Determine ballistic coefficeint for CYGNSS Spacecraft
+    # ref_args = [(ref_data[ref_id], ref_id, start_date_mopt, end_date_mopt, mass_tolerance, max_iterations, gmat_script_path, True) for ref_id in ref_ids]
+    
+    # with Pool(processes=cpu_count()) as pool:
+    #     ref_masses = list(tqdm(pool.imap(find_mass, ref_args), total=len(ref_args), desc="SWAS"))
+    
+    # ref_masses = [r for r in ref_masses if r is not None]
+
+    # # Determine mass (ballistic coefficient) adjustment
+    # ref_masses = np.array(ref_masses)
+    # ref_masses = np.round(ref_masses,3)
+    # ref_median = np.round(np.median(2.2/ref_masses),3)
+    # mass_adjustment = ref_median/0.02300
+    # print(mass_adjustment)
+
+
+    # sys.exit()
+
+
 
     # Read TLE data for spacecraft
-    data = read_tle_file(storm_name, tle_path, start_date, np.datetime64(end_str_2), filter_sigma)
+    ids = find_spacecraft(tle_path1, tle_path2, start_date_mopt, end_date_mopt, end_date_fopt, filter_sigma, False)
+    if len(ids) < 30:
+        ids = find_spacecraft(tle_path1, tle_path2, start_date_mopt, end_date_mopt, end_date_fopt, filter_sigma + 0.25, False)
+    if len(ids) < 30:
+        ids = find_spacecraft(tle_path1, tle_path2, start_date_mopt, end_date_mopt, end_date_fopt, filter_sigma + 0.5, False)
+
+    data = get_tle_data(tle_path1, ids, start_date_mopt, end_date_mopt)
+
+    data_for_weight_plot = get_tle_data(tle_path2, ids, start_date_fopt, end_date_fopt)
+    weight_plot(data_for_weight_plot, start_date_fopt, storm_name)
 
     # Determine ballistic coefficeints for spacecraft
     ids = list(data.keys())
-    args_list = [(data[sat_id], sat_id, start_date, end_date, mass_tolerance, max_iterations, gmat_script_path) for sat_id in ids]
+    args_list = [(data[sat_id], sat_id, start_date_mopt, end_date_mopt, mass_tolerance, max_iterations, gmat_script_path, False) for sat_id in ids]
+    
     with Pool(processes=cpu_count()) as pool:
-        masses = list(tqdm(pool.imap(find_mass, args_list), total=len(args_list), desc="MOPT"))
+        mass = list(tqdm(pool.imap(find_mass, args_list), total=len(args_list), desc="MOPT"))
 
-    # Apply mass adjustment
+    masses = [r for r in mass if r is not None]
+
     masses = np.array(masses)*mass_adjustment
 
-    # Output masses to output file
+    print(f"{len(masses)}/{len(mass)} Converged")
+
     with open(output_path, 'w') as file:
-        for id, mass in zip(ids, masses):
-            file.write(f"{id},{'NO CONVERGENCE' if not mass else mass}\n")
+        for id, m in zip(ids, masses):
+            file.write(f"{id},{m}\n")

@@ -1,31 +1,19 @@
 %----------------------------------------
-% MOA-2 MOPT GMAT Script Template
-%----------------------------------------
-% 
-% Author: Henry Christiansen
-% Date: 2026-01-26
-% Email: hennyc@umich.edu
-%
-% Description: This script template
-% creates a template for GMAT runs
-%----------------------------------------
-
-%----------------------------------------
 %---------- Spacecraft
 %----------------------------------------
 
 Create Spacecraft Sat;
 Sat.DateFormat = UTCGregorian;
-Sat.Epoch = 'EPOCH_VAL';
+Sat.Epoch = '05 Oct 2024 04:44:43.450';
 Sat.CoordinateSystem = EarthTEME;
 Sat.DisplayStateType = BrouwerMeanShort;
-Sat.BrouwerShortSMA = SMA_VAL;
-Sat.BrouwerShortECC = ECC_VAL;
-Sat.BrouwerShortINC = INC_VAL;
-Sat.BrouwerShortRAAN = RAAN_VAL;
-Sat.BrouwerShortAOP = AOP_VAL;
-Sat.BrouwerShortMA = MA_VAL;
-Sat.DryMass = 100;
+Sat.BrouwerShortSMA = 6852.961;
+Sat.BrouwerShortECC = 0.001147;
+Sat.BrouwerShortINC = 34.9464;
+Sat.BrouwerShortRAAN = 326.9874;
+Sat.BrouwerShortAOP = 115.1255;
+Sat.BrouwerShortMA = 245.0652;
+Sat.DryMass = 76.923;
 Sat.Cd = 1;
 Sat.Cr = 1;
 Sat.DragArea = 1;
@@ -81,7 +69,7 @@ EarthProp_ForceModel.GravityField.Earth.TideModel = 'None';
 EarthProp_ForceModel.Drag.AtmosphereModel = NRLMSISE00;
 EarthProp_ForceModel.Drag.HistoricWeatherSource = 'CSSISpaceWeatherFile';
 EarthProp_ForceModel.Drag.PredictedWeatherSource = 'SchattenFile';
-EarthProp_ForceModel.Drag.CSSISpaceWeatherFile = 'SpaceWeather-All-v1.2.txt';
+EarthProp_ForceModel.Drag.CSSISpaceWeatherFile = '/home/hennyc/data/OCT_2024/WEATHER.txt';
 EarthProp_ForceModel.Drag.SchattenFile = 'SchattenPredict.txt';
 EarthProp_ForceModel.Drag.F107 = 75;
 EarthProp_ForceModel.Drag.F107A = 75;
@@ -97,10 +85,10 @@ EarthProp_ForceModel.Drag.DragModel = 'Spherical';
 Create Propagator EarthProp;
 EarthProp.FM = EarthProp_ForceModel;
 EarthProp.Type = PrinceDormand78;
-EarthProp.InitialStepSize = 60;
+EarthProp.InitialStepSize = 30;
 EarthProp.Accuracy = 1e-12;
 EarthProp.MinStep = 0.001;
-EarthProp.MaxStep = 5000;
+EarthProp.MaxStep = 120;
 EarthProp.MaxStepAttempts = 50;
 EarthProp.StopIfAccuracyIsViolated = true;
 
@@ -122,9 +110,9 @@ Output.UpperLeft = [ 0 0 ];
 Output.Size = [ 0 0 ];
 Output.RelativeZOrder = 0;
 Output.Maximized = false;
-Output.Filename = FILENAME_VAL;
+Output.Filename = '/home/hennyc/src/msis_gmat_output.txt';
 Output.Precision = 16;
-Output.Add = {Sat.ElapsedDays, Sat.EarthTEME.BrouwerShortSMA, Sat.EarthTEME.BrouwerShortMA};
+Output.Add = {Sat.ElapsedSecs, Sat.EarthTEME.BrouwerShortSMA, Sat.EarthProp_ForceModel.AtmosDensity, Sat.EarthTEME.AOP, Sat.Earth.TA};
 Output.WriteHeaders = false;
 Output.LeftJustify = On;
 Output.ZeroFill = Off;
@@ -140,4 +128,4 @@ Output.AppendToExistingFile = false;
 %----------------------------------------
 
 BeginMissionSequence;
-Propagate EarthProp(Sat) {Sat.ElapsedDays = LENGTH_VAL};
+Propagate EarthProp(Sat) {Sat.ElapsedDays = 9.13166177};
