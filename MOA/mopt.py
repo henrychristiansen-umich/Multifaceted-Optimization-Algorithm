@@ -836,7 +836,10 @@ if __name__ == '__main__':
     tle_path2 = f'{BASE_PATH}/TLE_DATA_FOPT.json'
     output_path = f'{BASE_PATH}/MOPT_OUTPUT.txt'
     gmat_script_path = '/home/hennyc/src/mopt.script'
-    ref_path = "/home/hennyc/data/CYGNSS.json"
+    if afrl:
+	ref_path = f"/home/hennyc/afrl/moa/{storm_name}/CYGNSS.json"
+    else:
+  	ref_path = "/home/hennyc/data/CYGNSS.json"
 
     # Modify mopt.script with inputted atmospheric model
     with open(gmat_script_path, 'r') as f:
