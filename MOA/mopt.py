@@ -837,9 +837,9 @@ if __name__ == '__main__':
     output_path = f'{BASE_PATH}/MOPT_OUTPUT.txt'
     gmat_script_path = '/home/hennyc/src/mopt.script'
     if afrl:
-	ref_path = f"/home/hennyc/afrl/moa/{storm_name}/CYGNSS.json"
+        ref_path = f"/home/hennyc/afrl/moa/{storm_name}/CYGNSS.json"
     else:
-  	ref_path = "/home/hennyc/data/CYGNSS.json"
+        ref_path = "/home/hennyc/data/CYGNSS.json"
 
     # Modify mopt.script with inputted atmospheric model
     with open(gmat_script_path, 'r') as f:
