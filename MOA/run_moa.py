@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import os
 import numpy as np
 import argparse
 from pathlib import Path
@@ -35,10 +36,10 @@ if __name__ == '__main__':
         Path(f"/home/hennyc/data/{name}/Results").mkdir(exist_ok=True)
         base_path = f"/home/hennyc/data/{name}"
 
-    
-    with open(f"{base_path}/DATES.txt", "w") as f:
-        f.write(f"MOPT,{mopt_date},{start_date}\n")
-        f.write(f"FOPT,{start_date},{end_date}")
+    if not os.path.exists(f"{base_path}/DATES.txt"):
+        with open(f"{base_path}/DATES.txt", "w") as f:
+            f.write(f"MOPT,{mopt_date},{start_date}\n")
+            f.write(f"FOPT,{start_date},{end_date}")
     
     login_cmd = [
         "curl",
@@ -48,7 +49,8 @@ if __name__ == '__main__':
         "-d", "identity=hennyc@umich.edu&password=Michigan92!Ff121f89"
     ]
 
-    subprocess.run(login_cmd, check=True)
+    if not os.path.exists(f"{base_path}/cookies.txt"):
+        subprocess.run(login_cmd, check=True)
     print("Login done, cookies saved.")
 
     url = (
@@ -60,16 +62,18 @@ if __name__ == '__main__':
         "orderby/TLE_LINE1%20ASC/format/json"
     )
 
-    with open(f"{base_path}/TLE_DATA_MOPT.json", "w") as f:
-        subprocess.run(
-            [
-                "curl",
-                "-b", f"{base_path}/cookies.txt",
-                url
-            ],
-            stdout=f,
-            check=True
-        )
+    if not os.path.exists(f"{base_path}/TLE_DATA_MOPT.json"):
+
+        with open(f"{base_path}/TLE_DATA_MOPT.json", "w") as f:
+            subprocess.run(
+                [
+                    "curl",
+                    "-b", f"{base_path}/cookies.txt",
+                    url
+                ],
+                stdout=f,
+                check=True
+            )
 
     print("Saved TLE_DATA_MOPT.json")
 
@@ -84,18 +88,47 @@ if __name__ == '__main__':
         "orderby/TLE_LINE1%20ASC/format/json"
     )
 
-    with open(f"{base_path}/TLE_DATA_FOPT.json", "w") as f:
-        subprocess.run(
-            [
-                "curl",
-                "-b", f"{base_path}/cookies.txt",
-                url
-            ],
-            stdout=f,
-            check=True
-        )
+    if not os.path.exists(f"{base_path}/TLE_DATA_MOPT.json"):
 
-    print("Saved TLE_DATA_MOPT.json")
+        with open(f"{base_path}/TLE_DATA_FOPT.json", "w") as f:
+            subprocess.run(
+                [
+                    "curl",
+                    "-b", f"{base_path}/cookies.txt",
+                    url
+                ],
+                stdout=f,
+                check=True
+            )
+
+    print("Saved TLE_DATA_FOPT.json")
+
+
+
+    url = (
+        "https://www.space-track.org/basicspacedata/query/"
+        "class/gp_history/"
+        "NORAD_CAT_ID/41884,41885,41886,41887,41888,41889,41890,41891/"
+        f"EPOCH/{start_date_str_mopt}--{end_date_str_fopt}/"
+        "orderby/TLE_LINE1%20ASC/format/json"
+    )
+
+    if not os.path.exists(f"{base_path}/CYGNSS.json"):
+
+        with open(f"{base_path}/CYGNSS.json", "w") as f:
+            subprocess.run(
+                [
+                    "curl",
+                    "-b", f"{base_path}/cookies.txt",
+                    url
+                ],
+                stdout=f,
+                check=True
+            )
+
+    print("Saved CYGNSS.json")
+
+
 
     if afrl:
         print("Running MOPT")
