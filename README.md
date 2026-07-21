@@ -12,4 +12,4 @@ To setup MOA: \
 (5) Create an account with Space-Track.org and modify run_moa.py with username (st_usr) and password (st_pswrd)
 
 # Running MOA
-Once setup is complete, run run_moa.py to run MOA. Usage: python run_moa.py <event-name> <start-date> <end-date> (only 10 day windows accepted)
+Once setup is complete, run run_moa.py to run MOA. Usage: python run_moa.py event-name start-date end-date (only 10 day windows accepted)
