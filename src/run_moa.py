@@ -8,8 +8,12 @@ import json
 
 if __name__ == '__main__':
 
-    rel_path = "./" # Path to ouptut Folder
-    src_path = "./" # Path to src Folder
+    data_folder_path = ""
+    src_folder_path = ""
+    gmat_path = ""
+
+    st_usr = ""
+    st_pswrd = ""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("event")
@@ -39,9 +43,9 @@ if __name__ == '__main__':
     print(f"RUNNING MOA FOR {name} ({start_date} - {end_date})")
     print("===================================================")
 
-    Path(f"{rel_path}/{name}").mkdir(parents=True, exist_ok=True)
-    Path(f"{rel_path}/{name}/Results").mkdir(exist_ok=True)
-    base_path = f"{rel_path}/{name}"
+    Path(f"{data_folder_path}/{name}").mkdir(parents=True, exist_ok=True)
+    Path(f"{data_folder_path}/{name}/Results").mkdir(exist_ok=True)
+    base_path = f"{data_folder_path}/{name}"
 
     if not os.path.exists(f"{base_path}/DATES.txt"):
         with open(f"{base_path}/DATES.txt", "w") as f:
@@ -53,11 +57,11 @@ if __name__ == '__main__':
         "-c", f"{base_path}/cookies.txt",
         "-b", f"{base_path}/cookies.txt",
         "https://www.space-track.org/ajaxauth/login",
-        "-d", "identity=hennyc@umich.edu&password=Michigan92!Ff121f89"
+        "-d", f"identity={st_usr}&password={st_pswrd}"
     ]
 
     subprocess.run(login_cmd, check=True)
-    print("Login done, cookies saved.")
+    print("Login Complete")
 
     if not args.split:
         url = (
@@ -72,15 +76,7 @@ if __name__ == '__main__':
         if not os.path.exists(f"{base_path}/TLE_DATA_MOPT.json"):
 
             with open(f"{base_path}/TLE_DATA_MOPT.json", "w") as f:
-                subprocess.run(
-                    [
-                        "curl",
-                        "-b", f"{base_path}/cookies.txt",
-                        url
-                    ],
-                    stdout=f,
-                    check=True
-                )
+                subprocess.run(["curl","-b", f"{base_path}/cookies.txt",url], stdout=f, check=True)
 
         print("Saved TLE_DATA_MOPT.json")
 
@@ -98,15 +94,7 @@ if __name__ == '__main__':
         if not os.path.exists(f"{base_path}/TLE_DATA_MOPT1.json"):
 
             with open(f"{base_path}/TLE_DATA_MOPT1.json", "w") as f:
-                subprocess.run(
-                    [
-                        "curl",
-                        "-b", f"{base_path}/cookies.txt",
-                        url
-                    ],
-                    stdout=f,
-                    check=True
-                )
+                subprocess.run(["curl", "-b", f"{base_path}/cookies.txt", url], stdout=f, check=True)
 
         print("Saved TLE_DATA_MOPT1.json")       
 
@@ -122,15 +110,7 @@ if __name__ == '__main__':
         if not os.path.exists(f"{base_path}/TLE_DATA_MOPT2.json"):
 
             with open(f"{base_path}/TLE_DATA_MOPT2.json", "w") as f:
-                subprocess.run(
-                    [
-                        "curl",
-                        "-b", f"{base_path}/cookies.txt",
-                        url
-                    ],
-                    stdout=f,
-                    check=True
-                )
+                subprocess.run(["curl", "-b", f"{base_path}/cookies.txt", url], stdout=f, check=True)
 
         print("Saved TLE_DATA_MOPT2.json")  
 
@@ -155,20 +135,10 @@ if __name__ == '__main__':
         "orderby/TLE_LINE1%20ASC/format/json"
     )
 
-    print(url)
-
     if not os.path.exists(f"{base_path}/CYGNSS.json"):
 
         with open(f"{base_path}/CYGNSS.json", "w") as f:
-            subprocess.run(
-                [
-                    "curl",
-                    "-b", f"{base_path}/cookies.txt",
-                    url
-                ],
-                stdout=f,
-                check=True
-            )
+            subprocess.run(["curl","-b", f"{base_path}/cookies.txt", url], stdout=f, check=True)
 
     print("Saved CYGNSS.json")
 
@@ -184,21 +154,13 @@ if __name__ == '__main__':
     if not os.path.exists(f"{base_path}/TLE_DATA_FOPT.json"):
 
          with open(f"{base_path}/TLE_DATA_FOPT.json", "w") as f:
-            subprocess.run(
-                [
-                    "curl",
-                    "-b", f"{base_path}/cookies.txt",
-                    url
-                ],
-                stdout=f,
-                check=True
-            )
+            subprocess.run(["curl", "-b", f"{base_path}/cookies.txt", url], stdout=f, check=True)
 
     print("Saved TLE_DATA_FOPT.json")
 
     if not os.path.exists(f"{base_path}/MOPT_OUTPUT.txt"):
         print("Running MOPT")
-        subprocess.run(["python", f"{src_path}/mopt.py", name, "NRLMSISE00"])
+        subprocess.run(["python", f"{src_folder_path}/mopt.py", name, "NRLMSISE00", src_folder_path, data_folder_path, gmat_path])
         
         mass = {}
         with open(f"{base_path}/MOPT_OUTPUT.txt", "r") as f:
@@ -226,4 +188,4 @@ if __name__ == '__main__':
         print("Saved TLE_DATA_FOPT.json")
 
         print("Running FOPT")
-        subprocess.run(["python", f"{src_path}/fopt.py", name, "NRLMSISE00"])
+        subprocess.run(["python", f"{src_folder_path}/fopt.py", name, "NRLMSISE00", src_folder_path, data_folder_path, gmat_path])
