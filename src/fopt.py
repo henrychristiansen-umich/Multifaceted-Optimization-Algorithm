@@ -123,7 +123,7 @@ def find_adjustments(args):
     """
     try:
         # Sorting TLE_DATA
-        tle_data, sat_id, mass = args
+        tle_data, sat_id, mass, START_DATE, END_DATE, gmat_file, gmat_path = args
 
         start_date = pd.to_datetime(START_DATE)
         end_date = pd.to_datetime(END_DATE)
@@ -157,7 +157,7 @@ def find_adjustments(args):
         weather_path = os.path.join(temp_dir, f'weather_sat_{sat_id}.txt')
         output_path = os.path.join(temp_dir, f'output_{sat_id}.txt')
         
-        with open(GMAT_FILE, 'r') as f:
+        with open(gmat_file, 'r') as f:
             script = f.read()
             
         epoch = datetime.strptime(tle_data[0]['EPOCH'], "%Y-%m-%dT%H:%M:%S.%f")
@@ -184,7 +184,7 @@ def find_adjustments(args):
             f.write(script)
 
         # Get initial weather
-        _, content = read_weather_file()
+        _, content = read_weather_file(gmat_path)
         f10 = []
         ap = []
         df = pd.read_csv(StringIO(''.join(content)), sep=r'\s+', header=None, low_memory=False)
@@ -208,7 +208,7 @@ def find_adjustments(args):
 
         for i in range(iter1):
 
-            rmse, error = find_error(np.concatenate((f10, ap)), script_path, output_path, weather_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma, False)
+            rmse, error = find_error(np.concatenate((f10, ap)), script_path, output_path, weather_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma, False, gmat_path, START_DATE)
             
             if isinstance(error, bool):
                 return False
@@ -241,7 +241,7 @@ def find_adjustments(args):
         iter2 = 50
 
         for i in range(iter2):
-            rmse, error = find_error(np.concatenate((f10, ap)), script_path, output_path, weather_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma, False)
+            rmse, error = find_error(np.concatenate((f10, ap)), script_path, output_path, weather_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma, False, gmat_path, START_DATE)
 
             if isinstance(error, bool):
                 return False
@@ -268,11 +268,12 @@ def find_adjustments(args):
         #print(error)
         shutil.rmtree(temp_dir)
         return np.concatenate((f10, ap)), {"f10": errors_f10, "ap": errors_ap, "bias": interp_bias}
-    except Exception as _:
+    except Exception as e:
+        print(e)
         shutil.rmtree(temp_dir)
         return False
 
-def find_error(values, script_path, output_path, weather_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma, plot):
+def find_error(values, script_path, output_path, weather_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma, plot, path_orig, START_DATE):
     """
     Docstring for find_error: function to determine the RMS
     error between a modeled GMAT trajectory and the 
@@ -288,7 +289,7 @@ def find_error(values, script_path, output_path, weather_path, tle_sma_t, tle_sm
     should minimize the mass 
     """
     # Update weather file
-    update_weather_file(values, weather_path)
+    update_weather_file(values, weather_path, path_orig, START_DATE)
     
     # Run GMAT
     try:
@@ -331,7 +332,7 @@ def find_error(values, script_path, output_path, weather_path, tle_sma_t, tle_sm
     assert len(tle_dsma) == len(gmat_dsma)
     return np.sqrt(np.mean((tle_dsma - gmat_dsma) ** 2)), np.array(tle_dsma - gmat_dsma)
 
-def update_weather_file(values, path):
+def update_weather_file(values, path, path_orig, START_DATE):
     """
     Docstring for update_weather_file
     
@@ -345,7 +346,7 @@ def update_weather_file(values, path):
     f10_old = values[:10]
     ap_old = [values[10 + i*8 : 10 + (i+1)*8] for i in range(10)]
 
-    header, content = read_weather_file()
+    header, content = read_weather_file(path_orig)
 
     df = pd.read_csv(StringIO(''.join(content)), sep=r'\s+', header=None, low_memory=False)
     df['date'] = df[0].astype(str) + ' ' + df[1].astype(str).str.zfill(2) + ' ' + df[2].astype(str).str.zfill(2)
@@ -441,11 +442,11 @@ def update_f10(f10, tle_dsma_t, error):
     f10 -= 0.1*np.median(error)
     return np.clip(f10, 60.0, 400.0)
 
-def read_weather_file():
+def read_weather_file(path):
     """
     Docstring for read_weather_file: reads observed space weather data
     """
-    with open(f"{GMAT_PATH}/data/atmosphere/earth/SpaceWeather-All-v1.2.txt") as file:
+    with open(f"{path}/data/atmosphere/earth/SpaceWeather-All-v1.2.txt") as file:
         lines = file.readlines()
     
     header_end = next(i for i, line in enumerate(lines) if 'BEGIN OBSERVED' in line)
@@ -453,14 +454,14 @@ def read_weather_file():
     content = lines[header_end + 1:]
     return header, content
 
-def plot_ap_f10(vals):
+def plot_ap_f10(vals, path_orig, START_DATE):
     """
     Docstring for plot_ap_f10: plots FOPT results
     
     :param vals: Final adjusted F10.7 and ap values
     """
     med_vals = np.median(vals, axis=0)
-    _, content = read_weather_file()
+    _, content = read_weather_file(path_orig)
     f10_original = []
     ap_original = []
     df = pd.read_csv(StringIO(''.join(content)), sep=r'\s+', header=None, low_memory=False)
@@ -737,7 +738,7 @@ if __name__ == '__main__':
         
     START_DATE, END_DATE = np.datetime64(START_STR_2), np.datetime64(END_STRING_2)
     
-    BASE_PATH = f"/home/hennyc/afrl/moa/{STORM}"
+    BASE_PATH = f"{data_path}/{STORM}"
 
     TLE_FILE = f"{BASE_PATH}/TLE_DATA_FOPT.json"
     MASS_FILE = f"{BASE_PATH}/MOPT_OUTPUT.txt"
@@ -772,7 +773,7 @@ if __name__ == '__main__':
     if isinstance(data, BaseException):
         print(f"Problem in read_tle_file(): {data}")
     
-    args_list = [(data[sat_id], sat_id, mass[sat_id]) for sat_id in ids]
+    args_list = [(data[sat_id], sat_id, mass[sat_id], START_DATE, END_DATE, GMAT_FILE, GMAT_PATH) for sat_id in ids]
 
     with Pool(cpu_count()) as pool:
         vals = list(tqdm(pool.imap(find_adjustments, args_list), total=len(args_list), desc="FOPT"))
@@ -810,22 +811,22 @@ if __name__ == '__main__':
     mean_vals_upper = np.percentile(adjustments, q=75, axis=0)
     mean_vals_lower = np.percentile(adjustments, q=25, axis=0)
 
-    h, c = read_weather_file()
+    h, c = read_weather_file(GMAT_PATH)
     write_weather_file(WEATHER_OUT, h, c)
-    update_weather_file(med_vals, WEATHER_OUT)
+    update_weather_file(med_vals, WEATHER_OUT, GMAT_PATH, START_DATE)
 
     write_weather_file(f"{BASE_PATH}/WEATHER_WEIGHT_MEAN.txt", h, c)
-    update_weather_file(weighted_mean_vals, f"{BASE_PATH}/WEATHER_WEIGHT_MEAN.txt")
+    update_weather_file(weighted_mean_vals, f"{BASE_PATH}/WEATHER_WEIGHT_MEAN.txt", GMAT_PATH, START_DATE)
 
     write_weather_file(f"{BASE_PATH}/WEATHER_MEAN.txt", h, c)
-    update_weather_file(mean_vals, f"{BASE_PATH}/WEATHER_MEAN.txt")
+    update_weather_file(mean_vals, f"{BASE_PATH}/WEATHER_MEAN.txt", GMAT_PATH, START_DATE)
 
     write_weather_file(f"{BASE_PATH}/WEATHER_MEAN_UPPER.txt", h, c)
-    update_weather_file(mean_vals_upper, f"{BASE_PATH}/WEATHER_MEAN_UPPER.txt")
+    update_weather_file(mean_vals_upper, f"{BASE_PATH}/WEATHER_MEAN_UPPER.txt", GMAT_PATH, START_DATE)
 
     write_weather_file(f"{BASE_PATH}/WEATHER_MEAN_LOWER.txt", h, c)
-    update_weather_file(mean_vals_lower, f"{BASE_PATH}/WEATHER_MEAN_LOWER.txt")
+    update_weather_file(mean_vals_lower, f"{BASE_PATH}/WEATHER_MEAN_LOWER.txt", GMAT_PATH, START_DATE)
 
-    plot_ap_f10(adjustments)
+    plot_ap_f10(adjustments, GMAT_PATH, START_DATE)
     plot_convergence(errors_f10, errors_ap)
     plot_bias(biases)
