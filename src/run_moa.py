@@ -8,12 +8,12 @@ import json
 
 if __name__ == '__main__':
 
-    data_folder_path = ""
-    src_folder_path = ""
-    gmat_path = ""
+    data_folder_path = "C:\\Users\\hennyc\\Documents\\MOA_TEST\\data"
+    src_folder_path = "C:\\Users\\hennyc\\Documents\\MOA_TEST\\src"
+    gmat_path = "C:\\Users\\hennyc\\Documents\\MOA_PROJECT\\GMAT_2026"
 
-    st_usr = ""
-    st_pswrd = ""
+    st_usr = "hennyc@umich.edu"
+    st_pswrd = "Michigan92!Ff121f89"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("event")
@@ -161,7 +161,7 @@ if __name__ == '__main__':
     if not os.path.exists(f"{base_path}/MOPT_OUTPUT.txt"):
         print("Running MOPT")
         subprocess.run(["python", f"{src_folder_path}/mopt.py", name, "NRLMSISE00", src_folder_path, data_folder_path, gmat_path])
-        
+    else:
         mass = {}
         with open(f"{base_path}/MOPT_OUTPUT.txt", "r") as f:
             for line in f:
@@ -169,7 +169,7 @@ if __name__ == '__main__':
                 id = id.strip()
                 m = m.strip()
                 mass[id] = float(m)
-        
+            
         ids = list(mass.keys())
         ids_str = ",".join(map(str, ids))
 
