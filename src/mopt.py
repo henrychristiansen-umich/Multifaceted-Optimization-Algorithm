@@ -366,7 +366,7 @@ def find_mass(args):
     tle_dsma = tle_dsma * 1000
 
     # Prepare TEMP GMAT SCRIPT and Directory
-    base_temp_folder = "/home/hennyc/temp"
+    base_temp_folder = "./temp"
     os.makedirs(base_temp_folder, exist_ok=True)
 
     temp_dir = tempfile.mkdtemp(prefix=f'gmat_{sat_id}_', dir=base_temp_folder)
@@ -537,13 +537,18 @@ if __name__ == '__main__':
 
     """
 
-    rel_path = "./" # Path to data Folder
-
     parser = argparse.ArgumentParser()
     parser.add_argument("date")
     parser.add_argument("model")
+    parser.add_argument("src_path")
+    parser.add_argument("data_path")
+    parser.add_argument("gmat_path")
     args = parser.parse_args()
     storm_name = args.date
+
+    src_path = args.src_path
+    data_path = args.data_path
+    GMAT_PATH = args.gmat_path
 
     STORM_FIGURE_STR = storm_name
     atmospheric_model = args.model
@@ -564,13 +569,13 @@ if __name__ == '__main__':
     mass_tolerance = 0.1 # kg
 
     # define relative file paths
-    BASE_PATH = f'{rel_path}/{storm_name}'
+    BASE_PATH = f'{data_path}/{storm_name}'
 
     date_path = f'{BASE_PATH}/DATES.txt'
     tle_path1 = f'{BASE_PATH}/TLE_DATA_MOPT.json'
     tle_path2 = f'{BASE_PATH}/TLE_DATA_FOPT.json'
     output_path = f'{BASE_PATH}/MOPT_OUTPUT.txt'
-    gmat_script_path = '/home/hennyc/src/mopt.script'
+    gmat_script_path = f'{src_path}/mopt.script'
     ref_path = f'{BASE_PATH}/CYGNSS.json'
 
     # Modify mopt.script with inputted atmospheric model
@@ -588,8 +593,8 @@ if __name__ == '__main__':
     start_date_mopt, end_date_mopt, start_date_fopt, end_date_fopt = np.datetime64(start_str_mopt), np.datetime64(end_str_mopt), np.datetime64(start_str_fopt), np.datetime64(end_str_fopt)
 
     # Read CYGNSS TLE Data
-    # ref_ids = find_spacecraft(ref_path, ref_path, start_date_mopt, end_date_mopt, end_date_fopt, 100, True)
-    ref_ids = ['41884','41885','41886','41887','41888','41889','41890','41891']
+    ref_ids = find_spacecraft(ref_path, ref_path, start_date_mopt, end_date_mopt, end_date_fopt, 100, True)
+    # ref_ids = ['41884','41885','41886','41887','41888','41889','41890','41891']
     ref_data = get_tle_data(ref_path, ref_ids, start_date_mopt, end_date_mopt)
 
     # Determine ballistic coefficeint for CYGNSS Spacecraft
