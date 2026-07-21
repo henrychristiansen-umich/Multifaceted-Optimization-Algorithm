@@ -8,12 +8,12 @@ import json
 
 if __name__ == '__main__':
 
-    data_folder_path = "C:\\Users\\hennyc\\Documents\\MOA_TEST\\data"
-    src_folder_path = "C:\\Users\\hennyc\\Documents\\MOA_TEST\\src"
-    gmat_path = "C:\\Users\\hennyc\\Documents\\MOA_PROJECT\\GMAT_2026"
+    data_folder_path = ""
+    src_folder_path = ""
+    gmat_path = ""
 
-    st_usr = "hennyc@umich.edu"
-    st_pswrd = "Michigan92!Ff121f89"
+    st_usr = ""
+    st_pswrd = ""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("event")
