@@ -150,7 +150,7 @@ def find_adjustments(args):
         tle_dsma = tle_dsma * 1000
 
         # Prepare TEMP GMAT SCRIPT and Directory
-        path = '/home/hennyc/temp'
+        path = './temp'
         os.makedirs(path, exist_ok=True)
         temp_dir = tempfile.mkdtemp(prefix=f'gmat_{sat_id}_', dir=path)
         script_path = os.path.join(temp_dir, f'gmat_sat_{sat_id}.script')
@@ -445,7 +445,7 @@ def read_weather_file():
     """
     Docstring for read_weather_file: reads observed space weather data
     """
-    with open("/home/hennyc/gmat-git_two/GMAT-R2026a-Linux-x64/data/atmosphere/earth/SpaceWeather-All-v1.2.txt") as file:
+    with open(f"{GMAT_PATH}/data/atmosphere/earth/SpaceWeather-All-v1.2.txt") as file:
         lines = file.readlines()
     
     header_end = next(i for i, line in enumerate(lines) if 'BEGIN OBSERVED' in line)
@@ -713,22 +713,23 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("date")
     parser.add_argument("model")
-    parser.add_argument("--afrl", action="store_true")
+    parser.add_argument("src_path")
+    parser.add_argument("data_path")
+    parser.add_argument("gmat_path")
     args = parser.parse_args()
-    afrl = args.afrl
-
     STORM = args.date
     atmospheric_model = args.model
 
-    if atmospheric_model not in ("MSISE90", "NRLMSISE00", "MSIS21"):
-        print("Error: unknown <NRLMSISE Model>. Use MSISE90, NRLMSISE00 or MSIS21")
-        print("Usage: python fopt.py <month_year> <NRLMSISE Model>")
+    src_path = args.src_path
+    data_path = args.data_path
+    GMAT_PATH = args.gmat_path
+
+    if atmospheric_model not in ("MSISE90", "NRLMSISE00"):
+        print("Error: unknown <NRLMSISE Model>. Use MSISE90, NRLMSISE00")
+        print("Usage: python fopt.py <name> <NRLMSISE Model>")
         sys.exit(1)
 
-    if afrl:
-        date_file = f"/home/hennyc/afrl/moa/{STORM}/DATES.txt"
-    else:
-        date_file = f"/home/hennyc/data/{STORM}/DATES.txt"
+    date_file = f"{data_path}/{STORM}/DATES.txt"
 
     with open(date_file, "r") as file:
         _, _, _ = file.readline().strip().split(",")
@@ -736,22 +737,14 @@ if __name__ == '__main__':
         
     START_DATE, END_DATE = np.datetime64(START_STR_2), np.datetime64(END_STRING_2)
     
-    if afrl:
-        BASE_PATH = f"/home/hennyc/afrl/moa/{STORM}"
-    else:
-        BASE_PATH = f"/home/hennyc/data/{STORM}"
+    BASE_PATH = f"/home/hennyc/afrl/moa/{STORM}"
 
     TLE_FILE = f"{BASE_PATH}/TLE_DATA_FOPT.json"
     MASS_FILE = f"{BASE_PATH}/MOPT_OUTPUT.txt"
     WEATHER_OUT = f"{BASE_PATH}/WEATHER.txt"
-    GMAT_FILE = "/home/hennyc/src/fopt.script"
+    GMAT_FILE = f"{src_path}/fopt.script"
 
-    if afrl:
-        STORM_FIGURE_STR = STORM
-    else:
-        month_dict = {"MAR": "03", "APR": "04", "MAY": "05", "AUG": "08", "SEP": "09", "OCT": "10"}
-        m,y = STORM.split('_')
-        STORM_FIGURE_STR = f"{month_dict.get(m, None)}-{y}"
+    STORM_FIGURE_STR = STORM
 
     with open(GMAT_FILE, 'r') as f:
         script = f.read()
