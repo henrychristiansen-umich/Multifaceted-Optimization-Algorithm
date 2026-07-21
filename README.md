@@ -7,9 +7,11 @@ Many atmospheric models are unable to produce the significant increase and subse
 To setup MOA: \
 (1) download the latest version of GMAT from https://sourceforge.net/projects/gmat/files/GMAT/GMAT-R2026a/ \
 (2) enter the GMAT install directory and the api folder and run BuildApiStartupFile.py \
-(3) Modify load_gmat.py in the src folder to include the correct filepath to the GMAT install folder (GmatInstall) \
-(4) Modify run_moa.py to include the correct filepath to the output data folder (data_folder_path) and the src data folder (src_folder_path) and the GMAT install folder (gmat_path)
-(5) Create an account with Space-Track.org and modify run_moa.py with username (st_usr) and password (st_pswrd)
+(3) download the MOA src file from GitHub
+(4) create a 'data' folder in the same directoyr as teh downloaded src file
+(5) Modify load_gmat.py in the src folder to include the correct filepath to the GMAT install folder (GmatInstall) \
+(6) Modify run_moa.py to include the correct filepath to the output data folder (data_folder_path) and the src data folder (src_folder_path) and the GMAT install folder (gmat_path)
+(7) Create an account with Space-Track.org and modify run_moa.py with username (st_usr) and password (st_pswrd)
 
 # Running MOA
 Once setup is complete, run run_moa.py to run MOA. Usage: python run_moa.py event-name start-date end-date (only 10 day windows accepted)
