@@ -4,4 +4,8 @@ Many atmospheric models are unable to produce the significant increase and subse
 
 # Running MOA
 
-To run MOA, download the latest version of GMAT from https://sourceforge.net/projects/gmat/files/GMAT/GMAT-R2026a/. Modify load_gmat.py in the src folder to include the correct filepath to the GMAT directory. Run run_moa.py with the specified arguments.
+To run MOA:
+(1) download the latest version of GMAT from https://sourceforge.net/projects/gmat/files/GMAT/GMAT-R2026a/ 
+(2) Modify load_gmat.py in the src folder to include the correct filepath to the GMAT directory
+(3) Modify mopt.py and fopt.py to include the correct filepath to the data folder (rel_path) 
+(4) Run run_moa.py with the specified arguments.
