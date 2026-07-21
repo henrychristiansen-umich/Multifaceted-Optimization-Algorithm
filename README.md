@@ -8,7 +8,7 @@ To setup MOA: \
 (1) download the latest version of GMAT from https://sourceforge.net/projects/gmat/files/GMAT/GMAT-R2026a/ \
 (2) enter the GMAT install directory and the api folder and run BuildApiStartupFile.py \
 (3) Modify load_gmat.py in the src folder to include the correct filepath to the GMAT install folder (GmatInstall) \
-(4) Modify run_moa.py to include the correct filepath to the output data folder (rel_path) and the src data folder (src_path) and the GMAT install folder (gmat_path)\
+(4) Modify run_moa.py to include the correct filepath to the output data folder (rel_path) and the src data folder (src_path) and the GMAT install folder (gmat_path)
 
-To run MOA: \ 
+To run MOA:
 (1) run run_moa.py with the specified arguments \
