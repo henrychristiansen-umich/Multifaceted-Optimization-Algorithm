@@ -10,5 +10,5 @@ To setup MOA: \
 (3) Modify load_gmat.py in the src folder to include the correct filepath to the GMAT install folder (GmatInstall) \
 (4) Modify run_moa.py to include the correct filepath to the output data folder (rel_path) and the src data folder (src_path) and the GMAT install folder (gmat_path)
 
-To run MOA:
-(1) run run_moa.py with the specified arguments \
+To run MOA: \
+(1) run run_moa.py with the specified arguments
