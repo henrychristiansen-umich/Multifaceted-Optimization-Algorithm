@@ -209,18 +209,9 @@ def find_spacecraft(file1, file2, start_date, mid_date, end_date, sigma, cygnss)
         all_times.append(t)
         all_sma.append(s)
 
-        # 350 - 450 | e < 0.01 | no debris
         dsma_t, dsma = get_derivative(t, s, cygnss)
-
-        # if cygnss:
-        #     dsma = dsma * 1000
-        # else:
-
         dsma_t, dsma = get_spline(dsma_t, dsma, True)
         dsma = dsma * 1000
-
-            # dsma_t = np.arange(dsma_t[0], dsma_t[-1], 0.01)
-            # dsma = tle_dsma_spline(dsma_t) * 1000
 
         if np.any(dsma > 0):
             continue
@@ -370,26 +361,9 @@ def find_mass(args):
     tle_sma_t = np.array(tle_sma_t)
     tle_sma = np.array(tle_sma)
 
-    # if not cygnss:
-
     tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, cygnss)
-
     tle_dsma_t, tle_dsma = get_spline(tle_dsma_t, tle_dsma, False)
     tle_dsma = tle_dsma * 1000
-
-    # else:
-    #     tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, True)
-    #     tle_dsma = tle_dsma * 1000
-
-    #     tle_dsma = np.interp(np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01), tle_dsma_t, tle_dsma)
-    #     tle_dsma_t = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
-
-    # median = np.median(tle_dsma)
-    # std = np.std(tle_dsma)
-    # weights = np.where((tle_dsma < median) & (np.abs(tle_dsma - median) > std), 1000, 10)
-    # tle_dsma_spline = UnivariateSpline(tle_dsma_t, tle_dsma, w=weights, s = 0)
-    # tle_dsma_t = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
-    # tle_dsma = tle_dsma_spline(tle_dsma_t) * 1000
 
     # Prepare TEMP GMAT SCRIPT and Directory
     base_temp_folder = "/home/hennyc/temp"
@@ -436,80 +410,6 @@ def find_mass(args):
         return result.x
     else:
         return None
-    
-# def find_mass(args):
-#     """
-
-#     """
-#     # determine tle_dsma and tle_time
-#     tle_data, sat_id, start_date, end_date, tol, max_iter, gmat_template, cygnss = args
-
-#     start_date = pd.to_datetime(start_date)
-#     end_date = pd.to_datetime(end_date)
-
-#     tle_sma_t = []
-#     tle_sma = []
-
-#     for entry in tle_data:
-#         epoch = pd.to_datetime(entry['EPOCH'])
-#         tle_sma_t.append((epoch - start_date).total_seconds() / 86400.0)
-#         tle_sma.append(float(entry["SEMIMAJOR_AXIS"]))
-#         if not start_date <= epoch <= end_date:
-#             print("TLE DATA out of range - shouldn't happen")
-#             sys.exit()
-    
-#     tle_sma_t = np.array(tle_sma_t)
-#     tle_sma = np.array(tle_sma)
-
-#     tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, cygnss)
-
-#     tle_dsma = tle_dsma * 1000
-
-#     # Prepare TEMP GMAT SCRIPT and Directory
-#     base_temp_folder = "/home/hennyc/temp"
-#     os.makedirs(base_temp_folder, exist_ok=True)
-
-#     temp_dir = tempfile.mkdtemp(prefix=f'gmat_{sat_id}_', dir=base_temp_folder)
-#     script_path = os.path.join(temp_dir, f'gmat_sat_{sat_id}.script')
-#     output_path = os.path.join(temp_dir, f'output_{sat_id}.txt')
-#     with open(gmat_template, 'r') as f:
-#         script = f.read()
-    
-#     # Prepare GMAT Script for propogation
-#     epoch = datetime.strptime(tle_data[0]['EPOCH'], "%Y-%m-%dT%H:%M:%S.%f")
-#     epoch_string = epoch.strftime("%d %b %Y %H:%M:%S.") + f"{epoch.microsecond // 1000:03d}"
-#     values = {
-#         'EPOCH_VAL': epoch_string,
-#         'SMA_VAL': float(tle_data[0]['SEMIMAJOR_AXIS']),
-#         'ECC_VAL': float(tle_data[0]['ECCENTRICITY']),
-#         'INC_VAL': float(tle_data[0]['INCLINATION']),
-#         'RAAN_VAL': float(tle_data[0]['RA_OF_ASC_NODE']),
-#         'AOP_VAL': float(tle_data[0]['ARG_OF_PERICENTER']),
-#         'MA_VAL': float(tle_data[0]['MEAN_ANOMALY']),
-#         'FILENAME_VAL': output_path,
-#         'LENGTH_VAL': round(((np.datetime64(tle_data[-1]['EPOCH']) - np.datetime64
-#                               (tle_data[0]['EPOCH'])) / np.timedelta64(1, 'D')),8)
-#     }
-
-#     for key, val in values.items():
-#         script = script.replace(key, str(val))
-        
-#     with open(script_path, 'w') as f:
-#         f.write(script)
-
-#     # Bounded optimization to minimize the RMS error by changing the mass
-#     result = minimize_scalar(
-#         lambda mass: rms_error(mass, script_path, output_path, tle_sma_t, tle_dsma_t, tle_dsma),
-#         bounds=(0.1, 1000),
-#         method='bounded',
-#         options={'xatol': tol, 'maxiter': max_iter}
-#     )
-
-#     shutil.rmtree(temp_dir)
-#     if result.success:
-#         return result.x
-#     else:
-#         return None
 
 def get_derivative(x_arr, y_arr, cygnss):
     x_mid = (x_arr[:-1] + x_arr[1:]) / 2
@@ -519,121 +419,6 @@ def get_derivative(x_arr, y_arr, cygnss):
         x_mid = x_mid[mask]
         dsma = dsma[mask]
     return np.array(x_mid), np.array(dsma)
-    
-def create_plot(spacecraft_name, start_date,
-                tle_time, tle_sma, tle_dsma,
-                gmat_time, gmat_sma,
-                gmat_spline, gmat_dsma,
-                tle_spline, tle_time_spline):
-    
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 9), sharex=True)
-
-    # top
-    t_dense = np.linspace(min(tle_time), max(tle_time), 500)
-    tle_smooth = tle_spline(t_dense)
-
-    gmat_dense = np.linspace(min(gmat_time), max(gmat_time), 500)
-    gmat_smooth = gmat_spline(gmat_dense)
-
-    ax1.scatter(tle_time, tle_sma,
-                marker='s', s=100, color='black', label='TLE')
-
-    # TLE spline
-    ax1.plot(t_dense, tle_smooth,
-             color='green', linewidth=3, label='TLE Cubic Spline Fit')
-
-    # Once-per-orbit GMAT points
-    ax1.scatter(gmat_time, gmat_sma, marker='o',
-                color='blue', s=64, label='Propogated (Orbit-Averaged)')
-
-    # GMAT spline (change color to green like TLE spline)
-    ax1.plot(gmat_dense, gmat_smooth,
-             color='red', linewidth=3,
-             label='Propagated Cubic Spline Fit')
-
-    ax1.set_ylabel("SMA (km)", fontweight='bold')
-
-    handles, labels = ax1.get_legend_handles_labels()
-    unique = dict(zip(labels, handles))
-    ax1.legend(unique.values(), unique.keys(),
-               loc='upper right', framealpha=1, fontsize=10)
-
-    # bottom
-    tle_dsma_year = tle_dsma
-    gmat_dsma_year = gmat_dsma
-
-    ax2.plot(tle_time_spline, tle_dsma_year,
-             linestyle='-',
-             color='black', linewidth=3, label='TLE')
-
-    ax2.plot(tle_time_spline, gmat_dsma_year,
-             linestyle='-', 
-             color='red', linewidth=3, label='Propagated')
-
-    ax2.invert_yaxis()
-    ax2.set_ylabel("dSMA (km/day)", fontweight='bold')
-    ax2.set_xlabel("Date (2024)", fontweight='bold')
-    ax2.set_xlim(0, 10)
-    ax2.legend(loc='upper right', framealpha=1, fontsize=11)
-
-    tick_positions = np.arange(0, 11)
-    custom_labels = [(start_date + timedelta(days=int(i))).strftime("%m-%d")
-                     for i in tick_positions]
-    ax2.set_xticks(tick_positions)
-    ax2.set_xticklabels(custom_labels)
-
-    fig.suptitle(spacecraft_name + ": Propogated Trajectory and TLE Analysis for October 2024 Storm",
-                 fontsize=14, fontweight='bold')
-
-    plt.tight_layout(rect=[0, 0.05, 1, 1])
-    # plt.show()
-
-# def rms_error(mass, script_path, output_path, tle_sma_t, tle_dsma_t, tle_dsma):
-#     """
-
-#     """
-#     try:
-#         gmat.LoadScript(script_path)
-#         sat = gmat.GetObject("Sat")
-#         sat.SetField("DryMass", mass)
-#         gmat.Initialize()
-#         status = gmat.Execute()
-#         if status != 1:
-#             return np.nan
-#     except Exception as _:
-#         return np.nan
-#     finally:
-#         gmat.Clear()
-    
-#     # Read Data
-#     output_data = np.loadtxt(output_path, delimiter=',')
-#     time = np.array(output_data[:, 0])
-#     time = time + tle_sma_t[0]
-#     sma = np.array(output_data[:,1])
-
-#     ma = np.mod(output_data[:, 2], 360)
-
-#     wraps = np.diff(ma) < -300 
-#     orbit_id = np.cumsum(np.insert(wraps, 0, False))
-#     counts = np.bincount(orbit_id)
-#     sma_orbit_avg = np.bincount(orbit_id, weights=sma) / counts
-#     time_orbit_avg = np.bincount(orbit_id, weights=time) / counts
-
-#     # combine every k orbits
-#     k = 6
-#     n = len(sma_orbit_avg) // k  
-
-#     sma_orbit_avg = sma_orbit_avg[:n*k].reshape(n, k).mean(axis=1)
-#     time_orbit_avg = time_orbit_avg[:n*k].reshape(n, k).mean(axis=1)
-
-#     gmat_spline = UnivariateSpline(time_orbit_avg, sma_orbit_avg, s = 0)
-#     gmat_times = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
-#     gmat_dsma = gmat_spline.derivative()(gmat_times) * 1000
-
-#     #interplate tle to smooth times via linear interpolation
-#     tle_interp = np.interp(gmat_times, tle_dsma_t, tle_dsma)
-
-#     return np.sqrt(np.mean((tle_interp - gmat_dsma) ** 2))
 
 def rms_error(mass, script_path, output_path, tle_sma_t, tle_sma, tle_dsma_t, tle_dsma):
     """
@@ -658,11 +443,6 @@ def rms_error(mass, script_path, output_path, tle_sma_t, tle_sma, tle_dsma_t, tl
     time = time + tle_sma_t[0]
     sma = np.array(output_data[:,1])
 
-
-    # mask = time >= (time[-1] - 1.5/24)
-
-    # return abs(tle_sma[-1] - np.median(sma[mask]))
-
     ma = np.mod(output_data[:, 2], 360)
 
     wraps = np.diff(ma) < -300 
@@ -680,21 +460,12 @@ def rms_error(mass, script_path, output_path, tle_sma_t, tle_sma, tle_dsma_t, tl
     
 
     gmat_spline = UnivariateSpline(time_orbit_avg, sma_orbit_avg, s = 0)
-    # gmat_times = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
     gmat_dsma = gmat_spline.derivative()(tle_dsma_t) * 1000
     gmat_sma = gmat_spline(tle_sma_t)
     gmat_sma = np.array(gmat_sma)
 
-    # plt.plot(tle_dsma_t, gmat_dsma, label="GMAT")
-    # plt.plot(tle_dsma_t, tle_dsma, label='TLE')
-    # plt.legend()
-    # plt.show()
-
     dif = tle_sma[0] - gmat_sma[0]
     gmat_sma = gmat_sma + dif
-
-    # #interplate tle to smooth times via linear interpolation
-    # tle_interp = np.interp(gmat_times, tle_dsma_t, tle_dsma)
 
     return np.sqrt(np.mean((tle_dsma - gmat_dsma) ** 2))
 
@@ -723,27 +494,6 @@ def get_spline(x, y, fopt):
 
     return x_ret, y_ret2 * (y_max - y_min) + y_min
 
-    # mask: keep points within 2 sigma of median
-    # mask = (y >= median) | (y >= median - 2 * sigma_robust)
-    # x_in = x[mask]
-    # y_in = y[mask]
-
-    # sigma = 1.4826 * np.median(np.abs(y_in - np.median(y_in)))
-    
-    # coef = np.polyfit(x_in, y_in, 1)
-    # y_fit = np.polyval(coef, x_in)
-
-    # # residuals and variance
-    # residuals = y_in - y_fit
-    # sigma = np.std(residuals)
-    mean = np.mean(y)
-    w = np.ones_like(y) * (1.0 / sigma_robust)
-
-    # emphasize negative outliers (below mean - 2σ)
-    neg_outliers = y < (mean - 2 * sigma_robust)
-    w[neg_outliers] *= 10.0   # tune factor as needed
-    return UnivariateSpline(x, y, w=w, s=len(x))
-
 def weight_plot(data, start_date, storm):
     ids = list(data.keys())
 
@@ -753,7 +503,6 @@ def weight_plot(data, start_date, storm):
         tle_sma_t = []
         tle_sma = []
 
-        # --- build time series ---
         for entry in tle_data:
             epoch = pd.to_datetime(entry['EPOCH'])
             tle_sma_t.append((epoch - start_date).total_seconds() / 86400.0)
@@ -762,15 +511,11 @@ def weight_plot(data, start_date, storm):
         tle_sma_t = np.array(tle_sma_t)
         tle_sma = np.array(tle_sma)
 
-        # --- derivative ---
         tle_dsma_t, tle_dsma = get_derivative(tle_sma_t, tle_sma, False)
 
         spl = UnivariateSpline(tle_dsma_t, tle_dsma, s=0)
         tle_dsma_t, tle_dsma = get_spline(tle_dsma_t, tle_dsma, True)
         tle_dsma = tle_dsma * 1000
-
-        # tle_dsma_t = np.arange(tle_dsma_t[0], tle_dsma_t[-1], 0.01)
-        # tle_dsma = spl2(tle_dsma_t) * 1000
         tle_dsma2 = spl(tle_dsma_t) * 1000
 
         if np.any(tle_dsma > 0):
@@ -791,6 +536,8 @@ if __name__ == '__main__':
     Main execution logic for MOPT.
 
     """
+
+    rel_path = "./" # Path to data Folder
 
     parser = argparse.ArgumentParser()
     parser.add_argument("date")
@@ -817,7 +564,6 @@ if __name__ == '__main__':
     mass_tolerance = 0.1 # kg
 
     # define relative file paths
-    rel_path = "./" # INPUT RELATIVE PATH FOR DATA
     BASE_PATH = f'{rel_path}/{storm_name}'
 
     date_path = f'{BASE_PATH}/DATES.txt'
